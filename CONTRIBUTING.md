@@ -1,6 +1,6 @@
-# Contributing to ChatPharo
+# Contributing to PharoAgent
 
-Thank you for contributing to **ChatPharo**! These guidelines are here to keep collaboration smooth, consistent, and welcoming.
+Thank you for contributing to **PharoAgent**! These guidelines are here to keep collaboration smooth, consistent, and welcoming.
 
 ## Getting Started
 
@@ -19,7 +19,6 @@ Thank you for contributing to **ChatPharo**! These guidelines are here to keep c
 1. Keep your branch up to date with `main`.
 2. Make focused commits with clear messages.
 3. Open a pull request to `main` and explain:
-
    * what problem it solves,
    * what changed,
    * how it was tested.
