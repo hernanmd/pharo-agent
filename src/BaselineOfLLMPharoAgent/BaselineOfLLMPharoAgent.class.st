@@ -12,5 +12,5 @@ BaselineOfLLMPharoAgent >> baseline: spec [
 	spec for: #common do: [
 			spec
 				package: 'LLM-Pharo-Agent';
-				package: 'LLM-Pharo-Agent-Tests' with: [ spec requires: #( 'LLM-PharoAgent' ) ] ]
+				package: 'LLM-Pharo-Agent-Tests' with: [ spec requires: #( 'LLM-Pharo-Agent' ) ] ]
 ]
