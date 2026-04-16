@@ -1,5 +1,13 @@
 "
 CLI Client
+
+```
+PharoAgent stop.
+
+PharoAgent resetDefault.
+
+PharoAgent startOn: 5055
+```
 "
 Class {
 	#name : 'PharoAgent',
