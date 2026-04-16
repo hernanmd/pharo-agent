@@ -1,13 +1,17 @@
+"
+CLI Client
+"
 Class {
 	#name : 'PharoAgent',
 	#superclass : 'Object',
 	#instVars : [
 		'serverSocket',
 		'port',
-		'running'
+		'running',
+		'serverProcess'
 	],
-	#classInstVars : [
-		'defaultInstance'
+	#classVars : [
+		'DefaultInstance'
 	],
 	#category : 'LLM-Pharo-Agent',
 	#package : 'LLM-Pharo-Agent'
@@ -16,33 +20,47 @@ Class {
 { #category : 'accessing' }
 PharoAgent class >> default [
 
-	^ defaultInstance ifNil: [ defaultInstance := self new ]
+	^ DefaultInstance ifNil: [ DefaultInstance := self new ]
+]
+
+{ #category : 'accessing' }
+PharoAgent class >> openBrowserOnClassNamed: aString [
+
+	^ self default openBrowserOnClassNamed: aString
+]
+
+{ #category : 'accessing' }
+PharoAgent class >> openBrowserOnMethod: aMethodReferenceString [
+
+	^ self default openBrowserOnMethod: aMethodReferenceString
 ]
 
 { #category : 'accessing' }
 PharoAgent class >> portFromEnvironment [
 
 	| value |
-	value := Smalltalk platform environment
-		at: 'PHARO_CLI_PORT'
-		ifAbsent: [ '4044' ].
+	value := OSPlatform current environment at: 'PHARO_CLI_PORT' ifAbsent: [ '4044' ].
 	^ value asNumber
 ]
 
 { #category : 'accessing' }
 PharoAgent class >> resetDefault [
 
-	defaultInstance ifNotNil: [
-		[ defaultInstance stop ] on: Exception do: [ :ex | Transcript show: ex printString; cr ]
-	].
-	defaultInstance := nil
+	<script>
+	DefaultInstance ifNotNil: [
+			[ DefaultInstance stop ]
+				on: Exception
+				do: [ :ex |
+						Transcript
+							show: ex printString;
+							cr ] ].
+	DefaultInstance := nil
 ]
 
 { #category : 'accessing' }
 PharoAgent class >> start [
 
 	^ self startOn: self portFromEnvironment
-
 ]
 
 { #category : 'accessing' }
@@ -54,88 +72,170 @@ PharoAgent class >> startFromEnvironment [
 { #category : 'accessing' }
 PharoAgent class >> startOn: aPortNumber [
 
-	| server |
-	server := self default.
-	server port: aPortNumber.
-	server start.
-	^ server
-
+	| agent |
+	agent := self default.
+	agent port: aPortNumber.
+	agent start.
+	^ agent
 ]
 
 { #category : 'accessing' }
 PharoAgent class >> stop [
 
-	defaultInstance ifNotNil: [ defaultInstance stop ]
+	DefaultInstance ifNotNil: [ DefaultInstance stop ]
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
 PharoAgent >> evaluate: aString [
 
 	| result |
 	result := OpalCompiler new
-		source: aString;
-		evaluate.
-	^ result printString
+		          source: aString;
+		          evaluate.
+	^ result ifNil: [ 'nil' ] ifNotNil: [ result printString ]
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
+PharoAgent >> evaluateRequest: aString [
+
+	| source |
+	source := aString trimBoth.
+
+	source isEmpty ifTrue: [ ^ '' ]. "UI commands must be deferred onto the UI/world process."
+	(source beginsWith: 'OPEN_CLASS_BROWSER ') ifTrue: [
+		^ self openBrowserOnClassNamed: (source allButFirst: 'OPEN_CLASS_BROWSER ' size) ].
+
+	(source beginsWith: 'OPEN_METHOD_BROWSER ') ifTrue: [
+		^ self openBrowserOnMethod: (source allButFirst: 'OPEN_METHOD_BROWSER ' size) ].
+
+	^ self evaluate: source
+]
+
+{ #category : 'accessing' }
 PharoAgent >> exceptionStringFor: anException [
 
 	^ String streamContents: [ :stream |
-		stream
-			nextPutAll: anException class name;
-			nextPutAll: ': '.
-		anException messageText
-			ifNil: [ stream nextPutAll: anException printString ]
-			ifNotNil: [ stream nextPutAll: anException messageText ]
-	]
+			  stream
+				  nextPutAll: anException class name;
+				  nextPutAll: ': '.
+			  anException messageText
+				  ifNil: [ stream nextPutAll: anException printString ]
+				  ifNotNil: [ stream nextPutAll: anException messageText ] ]
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
 PharoAgent >> initialize [
 
 	super initialize.
 	port := 4044.
 	running := false.
+	serverSocket := nil.
+	serverProcess := nil
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
 PharoAgent >> isRunning [
 
 	^ running
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
+PharoAgent >> openBrowserOnClassNamed: aString [
+
+	| className class |
+	className := aString trimBoth.
+	class := Smalltalk at: className asSymbol ifAbsent: [ ^ 'ERROR: class not found: ' , className ].
+
+	self currentWorld worldState defer: [ Smalltalk tools browser openOnClass: class ].
+
+	^ 'OK: browser requested for class ' , className
+]
+
+{ #category : 'accessing' }
+PharoAgent >> openBrowserOnMethod: aMethodReferenceString [
+
+	| input parts class selector |
+	input := aMethodReferenceString trimBoth.
+	(parts := input substrings: '>>') size = 2 ifFalse: [ ^ 'ERROR: method reference must look like ClassName>>selector' ].
+
+	class := Smalltalk at: parts first asSymbol ifAbsent: [ ^ 'ERROR: class not found: ' , parts first ].
+
+	selector := parts second trimBoth asSymbol.
+
+	(class includesSelector: selector) ifFalse: [ ^ 'ERROR: selector not found: ' , input ].
+
+	self currentWorld worldState defer: [ Smalltalk tools browser openOnClass: class selector: selector ].
+
+	^ 'OK: browser requested for method ' , input
+]
+
+{ #category : 'accessing' }
 PharoAgent >> port [
 
 	^ port
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
 PharoAgent >> port: aPortNumber [
 
 	port := aPortNumber asNumber
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
+PharoAgent >> portFromEnvironment [
+
+	| value |
+	value := OSPlatform current environment at: 'PHARO_AGENT_PORT' ifAbsent: [ '4044' ].
+	^ value asNumber
+]
+
+{ #category : 'accessing' }
 PharoAgent >> serveClient: clientSocket [
 
 	| request response |
 	[
 		request := clientSocket receiveData.
-		request ifNil: [ request := '' ] ifNotNil: [ request := request asString ].
+		request := request ifNil: [ '' ] ifNotNil: [ request asString ].
 
-		response := [ self evaluate: request ]
-			on: Exception
-			do: [ :ex | self exceptionStringFor: ex ].
+		response := [ self evaluateRequest: request ]
+			            on: Exception
+			            do: [ :ex | self exceptionStringFor: ex ].
 
-		clientSocket sendData: response
-	] ensure: [
-		[ clientSocket closeAndDestroy ] on: Exception do: [ :ex | Transcript show: ex printString; cr ]
-	]
+		clientSocket sendData: response asString ] ensure: [
+			[ clientSocket close ]
+				on: Exception
+				do: [ :ex |
+						Transcript
+							show: ex printString;
+							cr ] ]
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
+PharoAgent >> serverLoop [
+
+	[ running ] whileTrue: [
+			| clientSocket |
+			clientSocket := nil.
+			[
+				serverSocket waitForConnectionFor: 1.
+				running ifFalse: [ ^ self ].
+
+				clientSocket := serverSocket accept.
+				clientSocket ifNotNil: [ [ self serveClient: clientSocket ] forkAt: Processor userBackgroundPriority ] ]
+				on: Exception
+				do: [ :ex |
+						running ifTrue: [
+								Transcript
+									show: '[PharoAgent] accept loop error: ';
+									show: ex printString;
+									cr ].
+						clientSocket ifNotNil: [
+								[ clientSocket close ]
+									on: Exception
+									do: [ :ignored |  ] ] ] ]
+]
+
+{ #category : 'accessing' }
 PharoAgent >> start [
 
 	running ifTrue: [ ^ self ].
@@ -144,36 +244,48 @@ PharoAgent >> start [
 	serverSocket listenOn: port backlogSize: 10.
 	running := true.
 
-	Transcript
-		show: '[PharoCLIServer] listening on '; show: port printString; cr.
+	serverProcess := [ self serverLoop ] forkAt: Processor userBackgroundPriority named: 'PharoAgent TCP Server'.
 
-	[ running ] whileTrue: [
-		| clientSocket |
-		[
-			clientSocket := serverSocket waitForAcceptFor: 1.
-			clientSocket ifNotNil: [
-				[ self serveClient: clientSocket ] forkAt: Processor userBackgroundPriority
-			]
-		] on: Exception do: [ :ex |
-			running ifTrue: [
-				Transcript
-					show: '[PharoCLIServer] accept loop error: ';
-					show: ex printString;
-					cr
-			]
-		]
-	].
+	Transcript
+		show: '[PharoAgent] listening on ';
+		show: port printString;
+		cr.
 
 	^ self
 ]
 
-{ #category : 'initialization' }
+{ #category : 'accessing' }
+PharoAgent >> startOn: aPortNumber [
+
+	| agent |
+	agent := self default.
+	agent port: aPortNumber.
+	agent start.
+	^ agent
+]
+
+{ #category : 'accessing' }
 PharoAgent >> stop [
 
 	running := false.
+
 	serverSocket ifNotNil: [
-		[ serverSocket closeAndDestroy ] on: Exception do: [ :ex | Transcript show: ex printString; cr ].
-		serverSocket := nil
-	].
+			[ serverSocket close ]
+				on: Exception
+				do: [ :ex |
+						Transcript
+							show: ex printString;
+							cr ].
+			serverSocket := nil ].
+
+	serverProcess ifNotNil: [
+			[ serverProcess terminate ]
+				on: Exception
+				do: [ :ex |
+						Transcript
+							show: ex printString;
+							cr ].
+			serverProcess := nil ].
+
 	^ self
 ]
