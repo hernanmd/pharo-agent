@@ -78,6 +78,15 @@ PharoAgent class >> startFromEnvironment [
 ]
 
 { #category : 'accessing' }
+PharoAgent class >> startMcp [
+	"Start the MCP server on the port declared by PHARO_MCP_PORT (defaults to 4046).
+	 Exposes Pharo tools and resources over HTTP so CLI agents like Claude Code,
+	 Codex or Qwen can talk directly to this live image."
+
+	^ PharoMcpServer start
+]
+
+{ #category : 'accessing' }
 PharoAgent class >> startOn: aPortNumber [
 
 	| agent |
