@@ -70,3 +70,67 @@ Expected output:
 echo "OPEN_CLASS_BROWSER String" | nc localhost 4044
 ```
 
+
+## Talk to the live image from Claude Code, Codex, or Qwen (MCP)
+
+PharoAgent ships with an MCP server (`LLM-Pharo-MCP`) that exposes the running
+image over HTTP so CLI agents like [Claude Code](https://claude.com/claude-code),
+Codex, or Qwen Code can talk directly to it — evaluate Smalltalk, open browsers,
+read class and method source — without spawning a fresh headless Pharo per call.
+
+### Start the MCP server
+
+In a Playground:
+
+```smalltalk
+PharoAgent startMcp.
+"or on a custom port"
+PharoAgent startMcpOn: 4046.
+```
+
+The server listens on `http://localhost:4046/mcp` by default. Override with the
+`PHARO_MCP_PORT` environment variable before launching the image.
+
+To stop it:
+
+```smalltalk
+PharoAgent stopMcp.
+```
+
+### Configure your CLI agent
+
+The repo ships a ready-to-use `.mcp.json` at the root:
+
+```json
+{
+  "mcpServers": {
+    "pharo": {
+      "type": "http",
+      "url": "http://localhost:4046/mcp"
+    }
+  }
+}
+```
+
+Claude Code picks it up automatically when started from the repo root. For
+Codex, Qwen or any other MCP-speaking client, point its MCP config at the same
+URL.
+
+### Registered tools
+
+| Tool                         | Description                                                   |
+| ---------------------------- | ------------------------------------------------------------- |
+| `pharo_eval`                 | Evaluate a Smalltalk expression, returns its `printString`    |
+| `pharo_open_class_browser`   | Open a System Browser on the given class                      |
+| `pharo_open_method_browser`  | Open a System Browser on `ClassName>>selector`                |
+| `pharo_class_source`         | Return the class definition and its selector list             |
+| `pharo_method_source`        | Return the source of a single method                          |
+
+### Registered resources
+
+| URI                                       | Description                             |
+| ----------------------------------------- | --------------------------------------- |
+| `pharo://system/info`                     | Pharo version, package count, image path |
+| `pharo://class/{className}`               | Class definition + method list          |
+| `pharo://method/{className}/{selector}`   | Source of a single method               |
+
