@@ -64,26 +64,50 @@ McpHttpTransport >> dispatchBody: aBodyString [
 ]
 
 { #category : 'private' }
+McpHttpTransport >> handleGetRequest: aZnRequest [
+	"A GET on the MCP endpoint. MCP Streamable HTTP lets a server optionally
+	 expose an SSE stream via GET; this transport does not, so clients that
+	 explicitly ask for text/event-stream get a 405 (with Allow: POST). Plain
+	 browser / curl hits get a friendly JSON status document instead of the
+	 bare 'Method Not Allowed' that used to be returned."
+
+	| accept |
+	accept := (aZnRequest headers at: 'Accept' ifAbsent: [ '' ]) asLowercase.
+	(accept includesSubstring: 'text/event-stream') ifTrue: [
+		^ self methodNotAllowedResponseFor: aZnRequest ].
+
+	^ ZnResponse ok: (ZnEntity
+			   with: self statusJsonString
+			   type: ZnMimeType applicationJson)
+]
+
+{ #category : 'private' }
 McpHttpTransport >> handleRequest: aZnRequest [
-	"Handle one Zinc HTTP request and return the ZnResponse to send back."
+	"Handle one Zinc HTTP request and return the ZnResponse to send back.
+	 POST  /mcp -> dispatch a JSON-RPC message and reply with the result.
+	 GET   /mcp -> return a small status page so browser/health checks don't
+	               see a confusing 'Method Not Allowed'. MCP clients asking
+	               for an SSE stream (Accept: text/event-stream) still get
+	               405, signalling that server-initiated streaming is not
+	               supported by this transport."
 
-	| body responseString |
-	aZnRequest method = 'POST' ifFalse: [
-		^ ZnResponse methodNotAllowed: aZnRequest ].
-
-	aZnRequest uri path = path ifFalse: [
+	| method requestPath body responseString |
+	requestPath := aZnRequest uri path.
+	requestPath = path ifFalse: [
 		^ ZnResponse notFound: aZnRequest uri ].
+
+	method := aZnRequest method.
+	method = 'GET' ifTrue: [ ^ self handleGetRequest: aZnRequest ].
+	method = 'POST' ifFalse: [
+		^ self methodNotAllowedResponseFor: aZnRequest ].
 
 	body := aZnRequest hasEntity
 		        ifTrue: [ aZnRequest entity string ]
 		        ifFalse: [ '' ].
-
 	responseString := [ self dispatchBody: body ]
 		                  on: Error
 		                  do: [ :ex | self jsonErrorFor: ex ].
-
 	responseString ifNil: [ ^ self noContentResponse ].
-
 	^ ZnResponse ok: (ZnEntity
 			   with: responseString
 			   type: ZnMimeType applicationJson)
@@ -119,6 +143,17 @@ McpHttpTransport >> jsonErrorFor: anException [
 					    at: 'message' put: anException messageText;
 					    yourself);
 			   yourself)
+]
+
+{ #category : 'private' }
+McpHttpTransport >> methodNotAllowedResponseFor: aZnRequest [
+	"Return a 405 with an Allow: POST header so well-behaved HTTP clients
+	 know which method this endpoint accepts."
+
+	| response |
+	response := ZnResponse methodNotAllowed: aZnRequest.
+	response headers at: 'Allow' put: 'POST'.
+	^ response
 ]
 
 { #category : 'private' }
@@ -191,6 +226,19 @@ McpHttpTransport >> start [
 	server onRequestRespond: [ :request | self handleRequest: request ].
 	server start.
 	running := true
+]
+
+{ #category : 'private' }
+McpHttpTransport >> statusJsonString [
+	"Small human-readable payload returned for GET /mcp. Helps users confirm
+	 the server is up without them needing to craft a JSON-RPC POST."
+
+	^ STONJSON toString: (OrderedDictionary new
+			   at: 'status' put: 'ok';
+			   at: 'transport' put: 'http';
+			   at: 'path' put: path;
+			   at: 'message' put: 'MCP endpoint is live. Send JSON-RPC requests via HTTP POST.';
+			   yourself)
 ]
 
 { #category : 'operations' }
