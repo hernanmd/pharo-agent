@@ -92,7 +92,7 @@ McpHttpTransport >> handleRequest: aZnRequest [
 	               supported by this transport."
 
 	| method requestPath body responseString |
-	requestPath := aZnRequest uri path.
+	requestPath := aZnRequest uri pathPrintString.
 	requestPath = path ifFalse: [
 		^ ZnResponse notFound: aZnRequest uri ].
 
