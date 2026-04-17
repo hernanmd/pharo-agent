@@ -87,6 +87,13 @@ PharoAgent class >> startMcp [
 ]
 
 { #category : 'accessing' }
+PharoAgent class >> startMcpOn: aPortNumber [
+	"Start the MCP server on aPortNumber. See #startMcp."
+
+	^ PharoMcpServer startOn: aPortNumber
+]
+
+{ #category : 'accessing' }
 PharoAgent class >> startOn: aPortNumber [
 
 	| agent |
@@ -100,6 +107,12 @@ PharoAgent class >> startOn: aPortNumber [
 PharoAgent class >> stop [
 
 	DefaultInstance ifNotNil: [ DefaultInstance stop ]
+]
+
+{ #category : 'accessing' }
+PharoAgent class >> stopMcp [
+
+	PharoMcpServer stop
 ]
 
 { #category : 'accessing' }
