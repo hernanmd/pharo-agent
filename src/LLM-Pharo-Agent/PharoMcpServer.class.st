@@ -78,6 +78,17 @@ PharoMcpServer >> classNamed: aName [
 ]
 
 { #category : 'private' }
+PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
+
+	| behavior |
+	behavior := self classNamed: aName.
+	behavior ifNil: [ ^ nil ].
+	^ aBoolean
+		  ifTrue: [ behavior classSide ]
+		  ifFalse: [ behavior ]
+]
+
+{ #category : 'private' }
 PharoMcpServer >> classSourceFor: aClassName [
 
 	| class stream |
@@ -119,6 +130,54 @@ PharoMcpServer >> evaluateSource: aString [
 		  ifNotNil: [ result printString ]
 ]
 
+{ #category : 'private' }
+PharoMcpServer >> booleanFrom: anObject default: aBoolean [
+
+	anObject ifNil: [ ^ aBoolean ].
+	anObject class = Boolean ifTrue: [ ^ anObject ].
+	(anObject isString or: [ anObject respondsTo: #asString ]) ifTrue: [
+		| value |
+		value := anObject asString trimBoth asLowercase.
+		(#( 'true' 'yes' '1' ) includes: value) ifTrue: [ ^ true ].
+		(#( 'false' 'no' '0' ) includes: value) ifTrue: [ ^ false ] ].
+	^ aBoolean
+]
+
+{ #category : 'private' }
+PharoMcpServer >> compileMethodSource: sourceCode forClassNamed: className protocol: protocolName classSide: classSideBoolean [
+
+	| behavior selector |
+	behavior := self behaviorNamed: className classSide: classSideBoolean.
+	behavior ifNil: [ ^ 'ERROR: class not found: ' , className ].
+	selector := self mutateImageDuring: [
+		            behavior
+			            compile: sourceCode
+			            classified: protocolName ].
+	^ 'Compiled ' , behavior name , '>>' , selector
+]
+
+{ #category : 'private' }
+PharoMcpServer >> createClassNamed: className superclassName: superclassName packageName: packageName tag: tagName instanceVariables: instanceVariables classVariables: classVariables [
+
+	| existingClass superclass builder createdClass sharedVariableNames |
+	existingClass := self classNamed: className.
+	existingClass ifNotNil: [ ^ 'ERROR: class already exists: ' , className ].
+	superclass := self classNamed: superclassName.
+	superclass ifNil: [ ^ 'ERROR: superclass not found: ' , superclassName ].
+	PackageOrganizer default ensurePackage: packageName.
+	builder := superclass << className asSymbol.
+	builder package: packageName.
+	tagName ifNotNil: [
+		| trimmedTag |
+		trimmedTag := tagName trimBoth.
+		trimmedTag ifNotEmpty: [ builder tag: trimmedTag ] ].
+	builder slots: (self normalizedNamesFrom: instanceVariables).
+	sharedVariableNames := self normalizedNamesFrom: classVariables.
+	sharedVariableNames isEmpty ifFalse: [ builder sharedVariables: sharedVariableNames ].
+	createdClass := self mutateImageDuring: [ builder install ].
+	^ 'Created class ' , createdClass name , ' in package ' , createdClass package name
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> initialize [
 
@@ -146,10 +205,43 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector [
 	^ (class >> selector) sourceCode
 ]
 
+{ #category : 'private' }
+PharoMcpServer >> mutateImageDuring: aBlock [
+
+	(Smalltalk globals includesKey: #EpMonitor) ifTrue: [
+		^ (Smalltalk globals at: #EpMonitor) disableDuring: aBlock ].
+	^ aBlock value
+]
+
+{ #category : 'private' }
+PharoMcpServer >> normalizedNamesFrom: anObject [
+
+	anObject ifNil: [ ^ #(  ) ].
+	anObject isString ifTrue: [
+		| trimmed |
+		trimmed := anObject trimBoth.
+		trimmed isEmpty ifTrue: [ ^ #(  ) ].
+		^ (((trimmed copyReplaceAll: ',' with: ' ') substrings: ' ')
+			   collect: [ :each | each trimBoth ])
+			  select: [ :each | each isNotEmpty ] ].
+	((anObject respondsTo: #collect:) and: [ anObject respondsTo: #asArray ]) ifTrue: [
+		^ ((anObject collect: [ :each | each asString trimBoth ])
+			   select: [ :each | each isNotEmpty ]) asArray ].
+	^ { anObject asString trimBoth }
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> port [
 
 	^ port
+]
+
+{ #category : 'private' }
+PharoMcpServer >> toolResultForText: aString [
+
+	(aString beginsWith: 'ERROR:')
+		ifTrue: [ ^ McpToolResult errorText: (aString allButFirst: 'ERROR: ' size) ].
+	^ McpToolResult successText: aString
 ]
 
 { #category : 'accessing' }
@@ -251,7 +343,7 @@ PharoMcpServer >> registerToolsOn: aServer [
 					  object: { ('className' -> McpSchema string) }
 					  required: #( 'className' ))
 			 handler: [ :args |
-				 McpToolResult successText:
+				 self toolResultForText:
 					 (self classSourceFor: (args at: 'className')) ]).
 
 	aServer addTool: (McpTool
@@ -263,9 +355,49 @@ PharoMcpServer >> registerToolsOn: aServer [
 							  ('selector' -> McpSchema string) }
 					  required: #( 'className' 'selector' ))
 			 handler: [ :args |
-				 McpToolResult successText: (self
+				 self toolResultForText: (self
 						  methodSourceFor: (args at: 'className')
-						  selector: (args at: 'selector')) ])
+						  selector: (args at: 'selector')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_create_class'
+			 description: 'Create a class in the running image for terminal-driven coding workflows.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> (McpSchema string: 'Name of the class to create')).
+							  ('superclassName' -> (McpSchema string: 'Superclass name, for example Object')).
+							  ('packageName' -> (McpSchema string: 'Target package name')).
+							  ('instanceVariables' -> (McpSchema string: 'Optional instance variable names separated by spaces or commas')).
+							  ('classVariables' -> (McpSchema string: 'Optional class variable names separated by spaces or commas')).
+							  ('tag' -> (McpSchema string: 'Optional package tag')) }
+					  required: #( 'className' 'superclassName' 'packageName' ))
+			 handler: [ :args |
+				 self toolResultForText: (self
+						  createClassNamed: (args at: 'className')
+						  superclassName: (args at: 'superclassName')
+						  packageName: (args at: 'packageName')
+						  tag: (args at: 'tag' ifAbsent: [ nil ])
+						  instanceVariables: (args at: 'instanceVariables' ifAbsent: [ nil ])
+						  classVariables: (args at: 'classVariables' ifAbsent: [ nil ])) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_compile_method'
+			 description: 'Compile a method on the instance side or class side of a class in the running image.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> (McpSchema string: 'Target class name')).
+							  ('sourceCode' -> (McpSchema string: 'Full Smalltalk method source code')).
+							  ('protocol' -> (McpSchema string: 'Protocol/category name')).
+							  ('classSide' -> (McpSchema string: 'Optional true/false string. true compiles on the class side')) }
+					  required: #( 'className' 'sourceCode' 'protocol' ))
+			 handler: [ :args |
+				 self toolResultForText: (self
+						  compileMethodSource: (args at: 'sourceCode')
+						  forClassNamed: (args at: 'className')
+						  protocol: (args at: 'protocol')
+						  classSide: (self
+								   booleanFrom: (args at: 'classSide' ifAbsent: [ false ])
+								   default: false)) ])
 ]
 
 { #category : 'accessing' }

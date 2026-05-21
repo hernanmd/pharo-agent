@@ -1,6 +1,7 @@
 # changes file
 *.changes
 *.chg
+*.DS_Store
 
 # system image
 *.image

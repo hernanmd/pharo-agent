@@ -76,7 +76,8 @@ echo "OPEN_CLASS_BROWSER String" | nc localhost 4044
 PharoAgent ships with an MCP server (`LLM-Pharo-MCP`) that exposes the running
 image over HTTP so CLI agents like [Claude Code](https://claude.com/claude-code),
 Codex, or Qwen Code can talk directly to it — evaluate Smalltalk, open browsers,
-read class and method source — without spawning a fresh headless Pharo per call.
+read class and method source, create classes, and compile methods — without
+spawning a fresh headless Pharo per call.
 
 ### Start the MCP server
 
@@ -125,6 +126,8 @@ URL.
 | `pharo_open_method_browser`  | Open a System Browser on `ClassName>>selector`                |
 | `pharo_class_source`         | Return the class definition and its selector list             |
 | `pharo_method_source`        | Return the source of a single method                          |
+| `pharo_create_class`         | Create a class in the live image                              |
+| `pharo_compile_method`       | Compile an instance-side or class-side method                 |
 
 ### Registered resources
 
@@ -134,3 +137,11 @@ URL.
 | `pharo://class/{className}`               | Class definition + method list          |
 | `pharo://method/{className}/{selector}`   | Source of a single method               |
 
+### Example terminal-driven edits
+
+Once the MCP server is running, a connected terminal agent can ask Pharo to do
+real image edits such as:
+
+- create `MyCounter` as a subclass of `Object` in package `Demo-Core`
+- compile `value ^ 42` on `MyCounter`
+- compile `default ^ self new` on the class side of `MyCounter`
