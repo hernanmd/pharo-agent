@@ -5,6 +5,7 @@ Class {
 		'port',
 		'path',
 		'server',
+		'mcpServer',
 		'responseHolders',
 		'responseMutex'
 	],
@@ -53,6 +54,8 @@ McpHttpTransport >> dispatchBody: aBodyString [
 	"Run the message handler for one request body and return the raw
 	 JSON response string, or nil if the handler produced no response
 	 (e.g. the message was a JSON-RPC notification)."
+
+	mcpServer ifNotNil: [ ^ mcpServer handleHttpMcpBody: aBodyString ].
 
 	| holder |
 	holder := Array new: 1.
@@ -107,10 +110,9 @@ McpHttpTransport >> handleRequest: aZnRequest [
 	responseString := [ self dispatchBody: body ]
 		                  on: Error
 		                  do: [ :ex | self jsonErrorFor: ex ].
+	(self isNotificationBody: body) ifTrue: [ ^ self noContentResponse ].
 	responseString ifNil: [ ^ self noContentResponse ].
-	^ ZnResponse ok: (ZnEntity
-			   with: responseString
-			   type: ZnMimeType applicationJson)
+	^ self jsonResponseWith: responseString
 ]
 
 { #category : 'private' }
@@ -125,9 +127,32 @@ McpHttpTransport >> initialize [
 ]
 
 { #category : 'private' }
+McpHttpTransport >> isNotificationBody: aBodyString [
+	"Detect JSON-RPC notifications so we can honor the MCP Streamable HTTP
+	 requirement to answer them with HTTP 202 and no body."
+
+	| payload |
+	aBodyString ifNil: [ ^ false ].
+	aBodyString trimBoth ifEmpty: [ ^ false ].
+	payload := [ STONJSON fromString: aBodyString ]
+		           on: Error
+		           do: [ :ex | ^ false ].
+	(payload respondsTo: #includesKey:) ifFalse: [ ^ false ].
+	^ (payload includesKey: 'method') and: [ (payload includesKey: 'id') not ]
+]
+
+{ #category : 'private' }
 McpHttpTransport >> isRunning [
 
 	^ running
+]
+
+{ #category : 'private' }
+McpHttpTransport >> jsonResponseWith: aJsonString [
+
+	^ ZnResponse ok: (ZnEntity
+			   with: aJsonString
+			   type: ZnMimeType applicationJson)
 ]
 
 { #category : 'private' }
@@ -158,13 +183,24 @@ McpHttpTransport >> methodNotAllowedResponseFor: aZnRequest [
 
 { #category : 'private' }
 McpHttpTransport >> noContentResponse [
-	"Return an empty JSON object with HTTP 200. JSON-RPC notifications
-	 expect no content, but 200 with {} is the most widely compatible
-	 response across MCP HTTP clients."
+	"JSON-RPC notifications sent over MCP Streamable HTTP must be answered
+	 with HTTP 202 Accepted and no body."
 
-	^ ZnResponse ok: (ZnEntity
-			   with: '{}'
-			   type: ZnMimeType applicationJson)
+	^ ZnResponse new
+		  statusLine: (ZnStatusLine code: 202);
+		  yourself
+]
+
+{ #category : 'accessing' }
+McpHttpTransport >> mcpServer [
+
+	^ mcpServer
+]
+
+{ #category : 'accessing' }
+McpHttpTransport >> mcpServer: aPharoMcpServer [
+
+	mcpServer := aPharoMcpServer
 ]
 
 { #category : 'accessing' }
