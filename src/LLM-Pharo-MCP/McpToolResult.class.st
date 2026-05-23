@@ -49,7 +49,7 @@ McpToolResult >> asDictionary [
 
 	| dict |
 	dict := OrderedDictionary new.
-	dict at: 'content' put: (content collect: [ :each | each asDictionary ]).
+	dict at: 'content' put: (content collect: [ :each | each asDictionary ]) asArray.
 	isError ifTrue: [ dict at: 'isError' put: true ].
 	^ dict
 ]

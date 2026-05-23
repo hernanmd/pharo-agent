@@ -59,7 +59,7 @@ McpPrompt >> asDictionary [
 	arguments isNotEmpty ifTrue: [
 		dict
 			at: 'arguments'
-			put: (arguments collect: [ :each | each asDictionary ]) ].
+			put: (arguments collect: [ :each | each asDictionary ]) asArray ].
 	^ dict
 ]
 

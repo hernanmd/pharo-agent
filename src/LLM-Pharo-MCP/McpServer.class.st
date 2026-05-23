@@ -189,7 +189,7 @@ McpServer >> handlePromptsGet: aRequest [
 McpServer >> handlePromptsList: aRequest [
 
 	| result promptList |
-	promptList := prompts values collect: [ :each | each asDictionary ].
+	promptList := prompts values collect: [ :each | each asDictionary deepCopy ].
 	result := OrderedDictionary new.
 	result at: 'prompts' put: promptList asArray.
 	^ McpJsonRpcResponse id: aRequest id result: result
@@ -208,7 +208,7 @@ McpServer >> handleRequest: aRequest [
 McpServer >> handleResourcesList: aRequest [
 
 	| result resourceList |
-	resourceList := resources values collect: [ :each | each asDictionary ].
+	resourceList := resources values collect: [ :each | each asDictionary deepCopy ].
 	result := OrderedDictionary new.
 	result at: 'resources' put: resourceList asArray.
 	^ McpJsonRpcResponse id: aRequest id result: result
@@ -258,8 +258,7 @@ McpServer >> handleResourcesRead: aRequest [
 McpServer >> handleResourcesTemplatesList: aRequest [
 
 	| result templateList |
-	templateList := resourceTemplates values collect: [ :each |
-		                each asDictionary ].
+	templateList := resourceTemplates values collect: [ :each | each asDictionary deepCopy ].
 	result := OrderedDictionary new.
 	result at: 'resourceTemplates' put: templateList asArray.
 	^ McpJsonRpcResponse id: aRequest id result: result
@@ -295,7 +294,7 @@ McpServer >> handleToolsCall: aRequest [
 McpServer >> handleToolsList: aRequest [
 
 	| result toolList |
-	toolList := tools values collect: [ :each | each asDictionary ].
+	toolList := tools values collect: [ :each | each asDictionary deepCopy ].
 	result := OrderedDictionary new.
 	result at: 'tools' put: toolList asArray.
 	^ McpJsonRpcResponse id: aRequest id result: result
