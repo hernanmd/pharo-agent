@@ -55,10 +55,9 @@ McpHttpTransport >> dispatchBody: aBodyString [
 	 JSON response string, or nil if the handler produced no response
 	 (e.g. the message was a JSON-RPC notification)."
 
-	mcpServer ifNotNil: [ ^ mcpServer handleHttpMcpBody: aBodyString ].
-
 	| holder |
 	holder := Array new: 1.
+	mcpServer ifNotNil: [ ^ mcpServer handleHttpMcpBody: aBodyString ].
 	self registerResponseHolder: holder.
 	[
 	messageHandler ifNotNil: [ messageHandler value: aBodyString ] ]
@@ -148,14 +147,6 @@ McpHttpTransport >> isRunning [
 ]
 
 { #category : 'private' }
-McpHttpTransport >> jsonResponseWith: aJsonString [
-
-	^ ZnResponse ok: (ZnEntity
-			   with: aJsonString
-			   type: ZnMimeType applicationJson)
-]
-
-{ #category : 'private' }
 McpHttpTransport >> jsonErrorFor: anException [
 	"Build a JSON-RPC parse-error envelope for an exception that escaped
 	 the normal dispatch path. With id=null since we don't know the id."
@@ -168,6 +159,26 @@ McpHttpTransport >> jsonErrorFor: anException [
 					    at: 'message' put: anException messageText;
 					    yourself);
 			   yourself)
+]
+
+{ #category : 'private' }
+McpHttpTransport >> jsonResponseWith: aJsonString [
+
+	^ ZnResponse ok: (ZnEntity
+			   with: aJsonString
+			   type: ZnMimeType applicationJson)
+]
+
+{ #category : 'accessing' }
+McpHttpTransport >> mcpServer [
+
+	^ mcpServer
+]
+
+{ #category : 'accessing' }
+McpHttpTransport >> mcpServer: aPharoMcpServer [
+
+	mcpServer := aPharoMcpServer
 ]
 
 { #category : 'private' }
@@ -189,18 +200,6 @@ McpHttpTransport >> noContentResponse [
 	^ ZnResponse new
 		  statusLine: (ZnStatusLine code: 202);
 		  yourself
-]
-
-{ #category : 'accessing' }
-McpHttpTransport >> mcpServer [
-
-	^ mcpServer
-]
-
-{ #category : 'accessing' }
-McpHttpTransport >> mcpServer: aPharoMcpServer [
-
-	mcpServer := aPharoMcpServer
 ]
 
 { #category : 'accessing' }

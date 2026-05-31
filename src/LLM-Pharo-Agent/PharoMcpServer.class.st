@@ -72,12 +72,6 @@ PharoMcpServer class >> stop [
 ]
 
 { #category : 'private' }
-PharoMcpServer >> classNamed: aName [
-
-	^ Smalltalk globals at: aName trimBoth asSymbol ifAbsent: [ nil ]
-]
-
-{ #category : 'private' }
 PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
 
 	| behavior |
@@ -86,48 +80,6 @@ PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
 	^ aBoolean
 		  ifTrue: [ behavior classSide ]
 		  ifFalse: [ behavior ]
-]
-
-{ #category : 'private' }
-PharoMcpServer >> classSourceFor: aClassName [
-
-	| class stream |
-	class := self classNamed: aClassName.
-	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
-	stream := String new writeStream.
-	stream
-		nextPutAll: class definitionString;
-		nextPut: Character lf;
-		nextPut: Character lf;
-		nextPutAll: '"--- methods ---"';
-		nextPut: Character lf.
-	(class selectors asSortedCollection: [ :a :b | a < b ]) do: [ :sel |
-		stream
-			nextPutAll: sel;
-			nextPut: Character lf ].
-	^ stream contents
-]
-
-{ #category : 'private' }
-PharoMcpServer >> deferToUi: aBlock [
-	"Run the given block on the UI process so that opening a browser
-	 works even when called from a background process (HTTP handler)."
-
-	self currentWorld worldState defer: aBlock
-]
-
-{ #category : 'private' }
-PharoMcpServer >> evaluateSource: aString [
-	"Evaluate the given Smalltalk source and return its printString. Errors
-	 bubble up to the caller (McpTool catches them and reports them as tool errors)."
-
-	| result |
-	result := OpalCompiler new
-		          source: aString;
-		          evaluate.
-	^ result
-		  ifNil: [ 'nil' ]
-		  ifNotNil: [ result printString ]
 ]
 
 { #category : 'private' }
@@ -235,6 +187,32 @@ PharoMcpServer >> callToolResultText: aString isError: aBoolean [
 ]
 
 { #category : 'private' }
+PharoMcpServer >> classNamed: aName [
+
+	^ Smalltalk globals at: aName trimBoth asSymbol ifAbsent: [ nil ]
+]
+
+{ #category : 'private' }
+PharoMcpServer >> classSourceFor: aClassName [
+
+	| class stream |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	stream := String new writeStream.
+	stream
+		nextPutAll: class definitionString;
+		nextPut: Character lf;
+		nextPut: Character lf;
+		nextPutAll: '"--- methods ---"';
+		nextPut: Character lf.
+	(class selectors asSortedCollection: [ :a :b | a < b ]) do: [ :sel |
+		stream
+			nextPutAll: sel;
+			nextPut: Character lf ].
+	^ stream contents
+]
+
+{ #category : 'private' }
 PharoMcpServer >> compileMethodSource: sourceCode forClassNamed: className protocol: protocolName classSide: classSideBoolean [
 
 	| behavior selector |
@@ -267,6 +245,28 @@ PharoMcpServer >> createClassNamed: className superclassName: superclassName pac
 	sharedVariableNames isEmpty ifFalse: [ builder sharedVariables: sharedVariableNames ].
 	createdClass := self mutateImageDuring: [ builder install ].
 	^ 'Created class ' , createdClass name , ' in package ' , createdClass package name
+]
+
+{ #category : 'private' }
+PharoMcpServer >> deferToUi: aBlock [
+	"Run the given block on the UI process so that opening a browser
+	 works even when called from a background process (HTTP handler)."
+
+	self currentWorld worldState defer: aBlock
+]
+
+{ #category : 'private' }
+PharoMcpServer >> evaluateSource: aString [
+	"Evaluate the given Smalltalk source and return its printString. Errors
+	 bubble up to the caller (McpTool catches them and reports them as tool errors)."
+
+	| result |
+	result := OpalCompiler new
+		          source: aString;
+		          evaluate.
+	^ result
+		  ifNil: [ 'nil' ]
+		  ifNotNil: [ result printString ]
 ]
 
 { #category : 'private' }
@@ -376,6 +376,12 @@ PharoMcpServer >> initializeResultFor: params [
 	^ result
 ]
 
+{ #category : 'accessing' }
+PharoMcpServer >> isRunning [
+
+	^ transport isNotNil and: [ transport isRunning ]
+]
+
 { #category : 'private' }
 PharoMcpServer >> jsonRpcErrorResponseForId: anId code: errorCode message: aMessage [
 
@@ -397,12 +403,6 @@ PharoMcpServer >> jsonRpcSuccessResponseForId: anId result: aResultObject [
 			   at: 'id' put: anId;
 			   at: 'result' put: aResultObject;
 			   yourself)
-]
-
-{ #category : 'accessing' }
-PharoMcpServer >> isRunning [
-
-	^ transport isNotNil and: [ transport isRunning ]
 ]
 
 { #category : 'private' }
@@ -442,90 +442,10 @@ PharoMcpServer >> normalizedNamesFrom: anObject [
 	^ { anObject asString trimBoth }
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> resourceContentForUri: aUriString [
-
-	| text |
-	aUriString = 'pharo://system/info' ifTrue: [
-		text := self systemInfoString.
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	(aUriString beginsWith: 'pharo://class/') ifTrue: [
-		| className |
-		className := aUriString allButFirst: 'pharo://class/' size.
-		text := self classSourceFor: className.
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	(aUriString beginsWith: 'pharo://method/') ifTrue: [
-		| remainder separatorIndex className selector |
-		remainder := aUriString allButFirst: 'pharo://method/' size.
-		separatorIndex := remainder indexOf: $/.
-		separatorIndex = 0 ifTrue: [
-			text := 'ERROR: malformed method resource URI: ' , aUriString ]
-		ifFalse: [
-			className := remainder copyFrom: 1 to: separatorIndex - 1.
-			selector := remainder copyFrom: separatorIndex + 1 to: remainder size.
-			text := self methodSourceFor: className selector: selector ].
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	^ OrderedDictionary new
-		  at: 'uri' put: aUriString;
-		  at: 'mimeType' put: 'text/plain';
-		  at: 'text' put: 'ERROR: unknown resource URI: ' , aUriString;
-		  yourself
-]
-
-{ #category : 'private' }
-PharoMcpServer >> resourceDefinitions [
-
-	^ {
-		  (OrderedDictionary new
-			   at: 'uri' put: 'pharo://system/info';
-			   at: 'name' put: 'Pharo System Info';
-			   at: 'description' put: 'Pharo version and image identity';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself) }
-]
-
-{ #category : 'private' }
-PharoMcpServer >> resourceTemplateDefinitions [
-
-	^ {
-		  (OrderedDictionary new
-			   at: 'uriTemplate' put: 'pharo://class/{className}';
-			   at: 'name' put: 'Class Source';
-			   at: 'description' put: 'Definition and method list of a class';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself).
-		  (OrderedDictionary new
-			   at: 'uriTemplate' put: 'pharo://method/{className}/{selector}';
-			   at: 'name' put: 'Method Source';
-			   at: 'description' put: 'Source code of a single method';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself) }
-]
-
 { #category : 'accessing' }
 PharoMcpServer >> port [
 
 	^ port
-]
-
-{ #category : 'private' }
-PharoMcpServer >> toolResultForText: aString [
-
-	(aString beginsWith: 'ERROR:')
-		ifTrue: [ ^ McpToolResult errorText: (aString allButFirst: 'ERROR: ' size) ].
-	^ McpToolResult successText: aString
 ]
 
 { #category : 'accessing' }
@@ -684,6 +604,78 @@ PharoMcpServer >> registerToolsOn: aServer [
 								   default: false)) ])
 ]
 
+{ #category : 'private' }
+PharoMcpServer >> resourceContentForUri: aUriString [
+
+	| text |
+	aUriString = 'pharo://system/info' ifTrue: [
+		text := self systemInfoString.
+		^ OrderedDictionary new
+			  at: 'uri' put: aUriString;
+			  at: 'mimeType' put: 'text/plain';
+			  at: 'text' put: text;
+			  yourself ].
+	(aUriString beginsWith: 'pharo://class/') ifTrue: [
+		| className |
+		className := aUriString allButFirst: 'pharo://class/' size.
+		text := self classSourceFor: className.
+		^ OrderedDictionary new
+			  at: 'uri' put: aUriString;
+			  at: 'mimeType' put: 'text/plain';
+			  at: 'text' put: text;
+			  yourself ].
+	(aUriString beginsWith: 'pharo://method/') ifTrue: [
+		| remainder separatorIndex className selector |
+		remainder := aUriString allButFirst: 'pharo://method/' size.
+		separatorIndex := remainder indexOf: $/.
+		separatorIndex = 0 ifTrue: [
+			text := 'ERROR: malformed method resource URI: ' , aUriString ]
+		ifFalse: [
+			className := remainder copyFrom: 1 to: separatorIndex - 1.
+			selector := remainder copyFrom: separatorIndex + 1 to: remainder size.
+			text := self methodSourceFor: className selector: selector ].
+		^ OrderedDictionary new
+			  at: 'uri' put: aUriString;
+			  at: 'mimeType' put: 'text/plain';
+			  at: 'text' put: text;
+			  yourself ].
+	^ OrderedDictionary new
+		  at: 'uri' put: aUriString;
+		  at: 'mimeType' put: 'text/plain';
+		  at: 'text' put: 'ERROR: unknown resource URI: ' , aUriString;
+		  yourself
+]
+
+{ #category : 'private' }
+PharoMcpServer >> resourceDefinitions [
+
+	^ {
+		  (OrderedDictionary new
+			   at: 'uri' put: 'pharo://system/info';
+			   at: 'name' put: 'Pharo System Info';
+			   at: 'description' put: 'Pharo version and image identity';
+			   at: 'mimeType' put: 'text/plain';
+			   yourself) }
+]
+
+{ #category : 'private' }
+PharoMcpServer >> resourceTemplateDefinitions [
+
+	^ {
+		  (OrderedDictionary new
+			   at: 'uriTemplate' put: 'pharo://class/{className}';
+			   at: 'name' put: 'Class Source';
+			   at: 'description' put: 'Definition and method list of a class';
+			   at: 'mimeType' put: 'text/plain';
+			   yourself).
+		  (OrderedDictionary new
+			   at: 'uriTemplate' put: 'pharo://method/{className}/{selector}';
+			   at: 'name' put: 'Method Source';
+			   at: 'description' put: 'Source code of a single method';
+			   at: 'mimeType' put: 'text/plain';
+			   yourself) }
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> server [
 
@@ -729,6 +721,23 @@ PharoMcpServer >> stop [
 					show: ex printString;
 					cr ] ].
 	transport := nil
+]
+
+{ #category : 'private' }
+PharoMcpServer >> stringSchema [
+
+	^ self stringSchema: nil
+]
+
+{ #category : 'private' }
+PharoMcpServer >> stringSchema: description [
+
+	| schema |
+	schema := OrderedDictionary new
+		          at: 'type' put: 'string';
+		          yourself.
+	description ifNotNil: [ schema at: 'description' put: description ].
+	^ schema
 ]
 
 { #category : 'starting' }
@@ -829,6 +838,14 @@ PharoMcpServer >> toolDefinitions [
 ]
 
 { #category : 'private' }
+PharoMcpServer >> toolResultForText: aString [
+
+	(aString beginsWith: 'ERROR:')
+		ifTrue: [ ^ McpToolResult errorText: (aString allButFirst: 'ERROR: ' size) ].
+	^ McpToolResult successText: aString
+]
+
+{ #category : 'private' }
 PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
 
 	^ OrderedDictionary new
@@ -842,21 +859,4 @@ PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
 PharoMcpServer >> transport [
 
 	^ transport
-]
-
-{ #category : 'private' }
-PharoMcpServer >> stringSchema [
-
-	^ self stringSchema: nil
-]
-
-{ #category : 'private' }
-PharoMcpServer >> stringSchema: description [
-
-	| schema |
-	schema := OrderedDictionary new
-		          at: 'type' put: 'string';
-		          yourself.
-	description ifNotNil: [ schema at: 'description' put: description ].
-	^ schema
 ]
