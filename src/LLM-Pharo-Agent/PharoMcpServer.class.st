@@ -383,26 +383,34 @@ PharoMcpServer >> isRunning [
 ]
 
 { #category : 'private' }
-PharoMcpServer >> jsonRpcErrorResponseForId: anId code: errorCode message: aMessage [
+PharoMcpServer >> jsonRpcErrorResponseForId: anId code: aCode message: aMessage [
 
-	^ STONJSON toString: (OrderedDictionary new
-			   at: 'jsonrpc' put: '2.0';
-			   at: 'id' put: anId;
-			   at: 'error' put: (OrderedDictionary new
-					    at: 'code' put: errorCode;
-					    at: 'message' put: aMessage;
-					    yourself);
-			   yourself)
+	^ String streamContents: [ :s |
+		  (STONWriter new
+			   jsonMode: true;
+			   referencePolicy: #ignore;
+			   on: s) nextPut: (OrderedDictionary new
+				   at: 'jsonrpc' put: '2.0';
+				   at: 'id' put: anId;
+				   at: 'error' put: (OrderedDictionary new
+						    at: 'code' put: aCode;
+						    at: 'message' put: aMessage;
+						    yourself);
+				   yourself) ]
 ]
 
 { #category : 'private' }
 PharoMcpServer >> jsonRpcSuccessResponseForId: anId result: aResultObject [
 
-	^ STONJSON toString: (OrderedDictionary new
-			   at: 'jsonrpc' put: '2.0';
-			   at: 'id' put: anId;
-			   at: 'result' put: aResultObject;
-			   yourself)
+	^ String streamContents: [ :s |
+		  (STONWriter new
+			   jsonMode: true;
+			   referencePolicy: #ignore;
+			   on: s) nextPut: (OrderedDictionary new
+				   at: 'jsonrpc' put: '2.0';
+				   at: 'id' put: anId;
+				   at: 'result' put: aResultObject;
+				   yourself) ]
 ]
 
 { #category : 'private' }
