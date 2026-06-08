@@ -47,7 +47,9 @@ PharoAgent class >> openBrowserOnMethod: aMethodReferenceString [
 PharoAgent class >> portFromEnvironment [
 
 	| value |
-	value := OSPlatform current environment at: 'PHARO_CLI_PORT' ifAbsent: [ '4044' ].
+	value := OSPlatform current environment
+		         at: 'PHARO_CLI_PORT'
+		         ifAbsent: [ '4044' ].
 	^ value asNumber
 ]
 
@@ -133,10 +135,12 @@ PharoAgent >> evaluateRequest: aString [
 
 	source isEmpty ifTrue: [ ^ '' ]. "UI commands must be deferred onto the UI/world process."
 	(source beginsWith: 'OPEN_CLASS_BROWSER ') ifTrue: [
-		^ self openBrowserOnClassNamed: (source allButFirst: 'OPEN_CLASS_BROWSER ' size) ].
+			^ self openBrowserOnClassNamed:
+				  (source allButFirst: 'OPEN_CLASS_BROWSER ' size) ].
 
 	(source beginsWith: 'OPEN_METHOD_BROWSER ') ifTrue: [
-		^ self openBrowserOnMethod: (source allButFirst: 'OPEN_METHOD_BROWSER ' size) ].
+			^ self openBrowserOnMethod:
+				  (source allButFirst: 'OPEN_METHOD_BROWSER ' size) ].
 
 	^ self evaluate: source
 ]
@@ -174,9 +178,12 @@ PharoAgent >> openBrowserOnClassNamed: aString [
 
 	| className class |
 	className := aString trimBoth.
-	class := Smalltalk at: className asSymbol ifAbsent: [ ^ 'ERROR: class not found: ' , className ].
+	class := Smalltalk
+		         at: className asSymbol
+		         ifAbsent: [ ^ 'ERROR: class not found: ' , className ].
 
-	self currentWorld worldState defer: [ Smalltalk tools browser openOnClass: class ].
+	self currentWorld worldState defer: [
+		Smalltalk tools browser openOnClass: class ].
 
 	^ 'OK: browser requested for class ' , className
 ]
@@ -186,15 +193,20 @@ PharoAgent >> openBrowserOnMethod: aMethodReferenceString [
 
 	| input parts class selector |
 	input := aMethodReferenceString trimBoth.
-	(parts := input substrings: '>>') size = 2 ifFalse: [ ^ 'ERROR: method reference must look like ClassName>>selector' ].
+	(parts := input substrings: '>>') size = 2 ifFalse: [
+		^ 'ERROR: method reference must look like ClassName>>selector' ].
 
-	class := Smalltalk at: parts first asSymbol ifAbsent: [ ^ 'ERROR: class not found: ' , parts first ].
+	class := Smalltalk
+		         at: parts first asSymbol
+		         ifAbsent: [ ^ 'ERROR: class not found: ' , parts first ].
 
 	selector := parts second trimBoth asSymbol.
 
-	(class includesSelector: selector) ifFalse: [ ^ 'ERROR: selector not found: ' , input ].
+	(class includesSelector: selector) ifFalse: [
+		^ 'ERROR: selector not found: ' , input ].
 
-	self currentWorld worldState defer: [ Smalltalk tools browser openOnClass: class selector: selector ].
+	self currentWorld worldState defer: [
+		Smalltalk tools browser openOnClass: class selector: selector ].
 
 	^ 'OK: browser requested for method ' , input
 ]
@@ -215,7 +227,9 @@ PharoAgent >> port: aPortNumber [
 PharoAgent >> portFromEnvironment [
 
 	| value |
-	value := OSPlatform current environment at: 'PHARO_AGENT_PORT' ifAbsent: [ '4044' ].
+	value := OSPlatform current environment
+		         at: 'PHARO_AGENT_PORT'
+		         ifAbsent: [ '4044' ].
 	^ value asNumber
 ]
 
@@ -251,7 +265,9 @@ PharoAgent >> serverLoop [
 				running ifFalse: [ ^ self ].
 
 				clientSocket := serverSocket accept.
-				clientSocket ifNotNil: [ [ self serveClient: clientSocket ] forkAt: Processor userBackgroundPriority ] ]
+				clientSocket ifNotNil: [
+						[ self serveClient: clientSocket ] forkAt:
+							Processor userBackgroundPriority ] ]
 				on: Exception
 				do: [ :ex |
 						running ifTrue: [
@@ -274,7 +290,9 @@ PharoAgent >> start [
 	serverSocket listenOn: port backlogSize: 10.
 	running := true.
 
-	serverProcess := [ self serverLoop ] forkAt: Processor userBackgroundPriority named: 'PharoAgent TCP Server'.
+	serverProcess := [ self serverLoop ]
+		                 forkAt: Processor userBackgroundPriority
+		                 named: 'PharoAgent TCP Server'.
 
 	Transcript
 		show: '[PharoAgent] listening on ';

@@ -9,8 +9,9 @@ Class {
 	#classVars : [
 		'DefaultInstance'
 	],
-	#category : 'LLM-Pharo-Agent',
-	#package : 'LLM-Pharo-Agent'
+	#category : 'LLM-Pharo-Agent-Core',
+	#package : 'LLM-Pharo-Agent',
+	#tag : 'Core'
 }
 
 { #category : 'accessing' }
@@ -71,6 +72,37 @@ PharoMcpServer class >> stop [
 	DefaultInstance ifNotNil: [ DefaultInstance stop ]
 ]
 
+{ #category : 'reflection' }
+PharoMcpServer >> allCallsOnClass: aClassName [
+	"Answer a textual list of every method that refers to the given class, either by its global binding or by using its name as a literal. Returns the string ERROR: ... if the class is not found."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self methodsAsLines: class allCallsOn
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> allInstVarNamesOf: aClassName [
+	"Answer a textual list of every instance variable name known to the class hierarchy."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: class allInstVarNames
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> allSlotsOf: aClassName [
+	"Answer a textual list of all slots visible in the class hierarchy, one slot per line, formatted as name=>(classOfSlot)."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines:
+		  (class allSlots collect: [ :s | s printString ])
+]
+
 { #category : 'private' }
 PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
 
@@ -80,6 +112,15 @@ PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
 	^ aBoolean
 		  ifTrue: [ behavior classSide ]
 		  ifFalse: [ behavior ]
+]
+
+{ #category : 'private - formatting' }
+PharoMcpServer >> booleanAsText: aBoolean [
+	"Answer true/false as the strings true/false."
+
+	^ aBoolean
+		  ifTrue: [ 'true' ]
+		  ifFalse: [ 'false' ]
 ]
 
 { #category : 'private' }
@@ -206,9 +247,9 @@ PharoMcpServer >> classSourceFor: aClassName [
 		nextPutAll: '"--- methods ---"';
 		nextPut: Character lf.
 	(class selectors asSortedCollection: [ :a :b | a < b ]) do: [ :sel |
-		stream
-			nextPutAll: sel;
-			nextPut: Character lf ].
+			stream
+				nextPutAll: sel;
+				nextPut: Character lf ].
 	^ stream contents
 ]
 
@@ -255,6 +296,17 @@ PharoMcpServer >> deferToUi: aBlock [
 	self currentWorld worldState defer: aBlock
 ]
 
+{ #category : 'modification' }
+PharoMcpServer >> ensureProtocol: aProtocol in: aClassName [
+	"Ensure the given protocol exists on the class (creating it if necessary). Returns the protocol name."
+
+	| class protocol |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	protocol := class ensureProtocol: aProtocol.
+	^ protocol name asString
+]
+
 { #category : 'private' }
 PharoMcpServer >> evaluateSource: aString [
 	"Evaluate the given Smalltalk source and return its printString. Errors
@@ -264,9 +316,17 @@ PharoMcpServer >> evaluateSource: aString [
 	result := OpalCompiler new
 		          source: aString;
 		          evaluate.
-	^ result
-		  ifNil: [ 'nil' ]
-		  ifNotNil: [ result printString ]
+	^ result ifNil: [ 'nil' ] ifNotNil: [ result printString ]
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> extensionSelectorsOf: aClassName [
+	"Answer a textual list of the extension selectors (methods defined outside the class own package) for the given class."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: class extensionSelectors
 ]
 
 { #category : 'private' }
@@ -340,7 +400,30 @@ PharoMcpServer >> handleHttpMcpBody: aBodyString [
 		  message: 'Method not found: ' , method
 ]
 
-{ #category : 'accessing' }
+{ #category : 'reflection' }
+PharoMcpServer >> hasInstVarNamed: aName in: aClassName [
+	"Answer true if the given class defines an instance variable with the given name."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self booleanAsText: (class hasInstVarNamed: aName)
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> hasSlotNamed: aName in: aClassName [
+	"Answer true if a slot with the given name exists in the class hierarchy. Wraps Class>>hasSlot: by first resolving the slot by name from allSlots."
+
+	| class slot |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	slot := class allSlots
+		        detect: [ :s | s name = aName asSymbol ]
+		        ifNone: [ ^ self booleanAsText: false ].
+	^ self booleanAsText: (class hasSlot: slot)
+]
+
+{ #category : 'initialization' }
 PharoMcpServer >> initialize [
 
 	super initialize.
@@ -374,6 +457,26 @@ PharoMcpServer >> initializeResultFor: params [
 			          'Use the available tools to inspect and edit the connected live Pharo image.';
 		          yourself.
 	^ result
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> instVarNamesOf: aClassName [
+	"Answer a textual list of the instance variable names defined locally on the class (not inherited)."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: class instVarNames
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> isMetaClass: aClassName [
+	"Answer true if the class side of the given class is a metaclass. Direct wrapper of Class>>isMeta which is true for metaclasses and false for regular classes."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self booleanAsText: class isMeta
 ]
 
 { #category : 'accessing' }
@@ -413,6 +516,38 @@ PharoMcpServer >> jsonRpcSuccessResponseForId: anId result: aResultObject [
 				   yourself) ]
 ]
 
+{ #category : 'reflection' }
+PharoMcpServer >> localSendersOf: aSymbolString in: aClassName [
+	"Answer a textual list of every method in the given class hierarchy that sends aSymbol."
+
+	| class selector |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	selector := aSymbolString trimBoth asSymbol.
+	^ self methodsAsLines: (class allLocalCallsOn: selector)
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> localSlotsOf: aClassName [
+	"Answer a textual list of slots defined locally on the class (not inherited), one per line."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines:
+		  (class localSlots collect: [ :s | s printString ])
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> methodSendersOf: aSelector [
+	"Answer a textual list of every method in the image that sends the given selector."
+
+	| selector |
+	selector := aSelector trimBoth asSymbol.
+	^ self methodsAsLines:
+		  (SystemNavigation default allSendersOf: selector)
+]
+
 { #category : 'private' }
 PharoMcpServer >> methodSourceFor: aClassName selector: aSelector [
 
@@ -423,6 +558,24 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector [
 	(class includesSelector: selector) ifFalse: [
 		^ 'ERROR: selector not found: ' , aClassName , '>>' , aSelector ].
 	^ (class >> selector) sourceCode
+]
+
+{ #category : 'private - formatting' }
+PharoMcpServer >> methodsAsLines: methods [
+	"Answer a newline-joined textual list of method references, one per line."
+
+	^ String cr join:
+		  (methods asOrderedCollection collect: [ :m | m printString ])
+]
+
+{ #category : 'modification' }
+PharoMcpServer >> moveClass: aClassName toPackage: aPackage tag: aTag [
+	"Move the named class to the given package and tag. Returns 'moved to <package>-<tag>' on success or an ERROR string."
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	class package: aPackage tag: aTag.
+	^ 'moved to ' , aPackage , '-' , aTag
 ]
 
 { #category : 'private' }
@@ -470,7 +623,7 @@ PharoMcpServer >> registerResourcesOn: aServer [
 			 name: 'Pharo System Info'
 			 description: 'Pharo version and image identity'
 			 mimeType: 'text/plain'
-			 handler: [ { McpContentItem text: self systemInfoString } ]).
+			 handler: [ { (McpContentItem text: self systemInfoString) } ]).
 
 	aServer addResourceTemplate: (McpResourceTemplate
 			 uriTemplate: 'pharo://class/{className}'
@@ -478,7 +631,8 @@ PharoMcpServer >> registerResourcesOn: aServer [
 			 description: 'Definition and method list of a class'
 			 mimeType: 'text/plain'
 			 handler: [ :params |
-				 { McpContentItem text: (self classSourceFor: (params at: 'className')) } ]).
+					 { (McpContentItem text:
+						  (self classSourceFor: (params at: 'className'))) } ]).
 
 	aServer addResourceTemplate: (McpResourceTemplate
 			 uriTemplate: 'pharo://method/{className}/{selector}'
@@ -486,20 +640,21 @@ PharoMcpServer >> registerResourcesOn: aServer [
 			 description: 'Source code of a single method'
 			 mimeType: 'text/plain'
 			 handler: [ :params |
-				 { McpContentItem text: (self
-						    methodSourceFor: (params at: 'className')
-						    selector: (params at: 'selector')) } ])
+					 { (McpContentItem text: (self
+							   methodSourceFor: (params at: 'className')
+							   selector: (params at: 'selector'))) } ])
 ]
 
-{ #category : 'accessing' }
+{ #category : 'registration' }
 PharoMcpServer >> registerToolsOn: aServer [
 
 	aServer addTool: (McpTool
 			 name: 'pharo_eval'
-			 description: 'Evaluate a Smalltalk expression in the live Pharo image. Returns the printString of the result.'
+			 description:
+			 'Evaluate a Smalltalk expression in the live Pharo image. Returns the printString of the result.'
 			 inputSchema: (McpSchema
-					  object: {
-							  ('code' -> (McpSchema string: 'Smalltalk source to evaluate')) }
+					  object:
+					  { ('code' -> (McpSchema string: 'Smalltalk source to evaluate')) }
 					  required: #( 'code' ))
 			 handler: [ :args |
 				 McpToolResult successText:
@@ -507,56 +662,70 @@ PharoMcpServer >> registerToolsOn: aServer [
 
 	aServer addTool: (McpTool
 			 name: 'pharo_open_class_browser'
-			 description: 'Open a System Browser on the given class in the running image.'
+			 description:
+			 'Open a System Browser on the given class in the running image.'
 			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> (McpSchema string: 'Fully-qualified class name, e.g. String')) }
+					  object: { ('className'
+						   ->
+						   (McpSchema string: 'Fully-qualified class name, e.g. String')) }
 					  required: #( 'className' ))
 			 handler: [ :args |
-				 | name class |
-				 name := (args at: 'className') trimBoth.
-				 class := self classNamed: name.
-				 class
-					 ifNil: [ McpToolResult errorText: 'Class not found: ' , name ]
-					 ifNotNil: [
-						 self deferToUi: [ Smalltalk tools browser openOnClass: class ].
-						 McpToolResult successText: 'Browser requested for class ' , name ] ]).
+					 | name class |
+					 name := (args at: 'className') trimBoth.
+					 class := self classNamed: name.
+					 class
+						 ifNil: [ McpToolResult errorText: 'Class not found: ' , name ]
+						 ifNotNil: [
+								 self deferToUi: [ Smalltalk tools browser openOnClass: class ].
+								 McpToolResult successText:
+									 'Browser requested for class ' , name ] ]).
 
 	aServer addTool: (McpTool
 			 name: 'pharo_open_method_browser'
-			 description: 'Open a System Browser on the given method. Reference format: ClassName>>selector.'
+			 description:
+			 'Open a System Browser on the given method. Reference format: ClassName>>selector.'
 			 inputSchema: (McpSchema
-					  object: {
-							  ('reference' -> (McpSchema string: 'Method reference like String>>asUppercase')) }
+					  object: { ('reference'
+						   ->
+						   (McpSchema string:
+							    'Method reference like String>>asUppercase')) }
 					  required: #( 'reference' ))
 			 handler: [ :args |
-				 | ref parts class selector |
-				 ref := (args at: 'reference') trimBoth.
-				 parts := ref substrings: '>>'.
-				 parts size = 2
-					 ifFalse: [ McpToolResult errorText:
-							 'Method reference must look like ClassName>>selector' ]
-					 ifTrue: [
-						 class := self classNamed: parts first.
-						 class
-							 ifNil: [ McpToolResult errorText: 'Class not found: ' , parts first ]
-							 ifNotNil: [
-								 selector := parts second trimBoth asSymbol.
-								 (class includesSelector: selector)
-									 ifFalse: [ McpToolResult errorText: 'Selector not found: ' , ref ]
-									 ifTrue: [
-										 self deferToUi: [ Smalltalk tools browser openOnClass: class selector: selector ].
-										 McpToolResult successText: 'Browser requested for method ' , ref ] ] ] ]).
+					 | ref parts class selector |
+					 ref := (args at: 'reference') trimBoth.
+					 parts := ref substrings: '>>'.
+					 parts size = 2
+						 ifFalse: [
+								 McpToolResult errorText:
+									 'Method reference must look like ClassName>>selector' ]
+						 ifTrue: [
+								 class := self classNamed: parts first.
+								 class
+									 ifNil: [
+									 McpToolResult errorText: 'Class not found: ' , parts first ]
+									 ifNotNil: [
+											 selector := parts second trimBoth asSymbol.
+											 (class includesSelector: selector)
+												 ifFalse: [
+												 McpToolResult errorText: 'Selector not found: ' , ref ]
+												 ifTrue: [
+														 self deferToUi: [
+															 Smalltalk tools browser
+																 openOnClass: class
+																 selector: selector ].
+														 McpToolResult successText:
+															 'Browser requested for method ' , ref ] ] ] ]).
 
 	aServer addTool: (McpTool
 			 name: 'pharo_class_source'
-			 description: 'Return the class definition and the list of selectors for a class.'
+			 description:
+			 'Return the class definition and the list of selectors for a class.'
 			 inputSchema: (McpSchema
 					  object: { ('className' -> McpSchema string) }
 					  required: #( 'className' ))
 			 handler: [ :args |
-				 self toolResultForText:
-					 (self classSourceFor: (args at: 'className')) ]).
+					 McpToolResult successText:
+						 (self classSourceFor: (args at: 'className')) ]).
 
 	aServer addTool: (McpTool
 			 name: 'pharo_method_source'
@@ -567,49 +736,236 @@ PharoMcpServer >> registerToolsOn: aServer [
 							  ('selector' -> McpSchema string) }
 					  required: #( 'className' 'selector' ))
 			 handler: [ :args |
-				 self toolResultForText: (self
-						  methodSourceFor: (args at: 'className')
-						  selector: (args at: 'selector')) ]).
+					 McpToolResult successText: (self
+							  methodSourceFor: (args at: 'className')
+							  selector: (args at: 'selector')) ]).
 
 	aServer addTool: (McpTool
-			 name: 'pharo_create_class'
-			 description: 'Create a class in the running image for terminal-driven coding workflows.'
+			 name: 'pharo_class_references'
+			 description:
+			 'Answer every method in the image that refers to the given class by name or as a global binding. Returns one method per line as Class>>selector.'
 			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> (McpSchema string: 'Name of the class to create')).
-							  ('superclassName' -> (McpSchema string: 'Superclass name, for example Object')).
-							  ('packageName' -> (McpSchema string: 'Target package name')).
-							  ('instanceVariables' -> (McpSchema string: 'Optional instance variable names separated by spaces or commas')).
-							  ('classVariables' -> (McpSchema string: 'Optional class variable names separated by spaces or commas')).
-							  ('tag' -> (McpSchema string: 'Optional package tag')) }
-					  required: #( 'className' 'superclassName' 'packageName' ))
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
 			 handler: [ :args |
-				 self toolResultForText: (self
-						  createClassNamed: (args at: 'className')
-						  superclassName: (args at: 'superclassName')
-						  packageName: (args at: 'packageName')
-						  tag: (args at: 'tag' ifAbsent: [ nil ])
-						  instanceVariables: (args at: 'instanceVariables' ifAbsent: [ nil ])
-						  classVariables: (args at: 'classVariables' ifAbsent: [ nil ])) ]).
+					 McpToolResult successText:
+						 (self allCallsOnClass: (args at: 'className')) ]).
 
 	aServer addTool: (McpTool
-			 name: 'pharo_compile_method'
-			 description: 'Compile a method on the instance side or class side of a class in the running image.'
+			 name: 'pharo_method_senders'
+			 description:
+			 'Answer every method in the image that sends the given selector. Returns one method per line as Class>>selector.'
+			 inputSchema: (McpSchema
+					  object: { ('selector' -> McpSchema string) }
+					  required: #( 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self methodSendersOf: (args at: 'selector')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_local_senders'
+			 description:
+			 'Answer every method in the given class hierarchy that sends the given selector. Returns one method per line as Class>>selector.'
 			 inputSchema: (McpSchema
 					  object: {
-							  ('className' -> (McpSchema string: 'Target class name')).
-							  ('sourceCode' -> (McpSchema string: 'Full Smalltalk method source code')).
-							  ('protocol' -> (McpSchema string: 'Protocol/category name')).
-							  ('classSide' -> (McpSchema string: 'Optional true/false string. true compiles on the class side')) }
-					  required: #( 'className' 'sourceCode' 'protocol' ))
+							  ('className' -> McpSchema string).
+							  ('selector' -> McpSchema string) }
+					  required: #( 'className' 'selector' ))
 			 handler: [ :args |
-				 self toolResultForText: (self
-						  compileMethodSource: (args at: 'sourceCode')
-						  forClassNamed: (args at: 'className')
-						  protocol: (args at: 'protocol')
-						  classSide: (self
-								   booleanFrom: (args at: 'classSide' ifAbsent: [ false ])
-								   default: false)) ])
+					 McpToolResult successText:
+						 (self
+							  localSendersOf: (args at: 'selector')
+							  in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_selectors_in_protocol'
+			 description:
+			 'Answer every selector of the class hierarchy that lives in the named protocol.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('protocol' -> McpSchema string) }
+					  required: #( 'className' 'protocol' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  selectorsInProtocol: (args at: 'protocol')
+							  of: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_extension_selectors'
+			 description:
+			 'Answer every extension selector (method defined in another package than the class own) on the class.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self extensionSelectorsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_has_inst_var_named'
+			 description:
+			 'Answer true if the class hierarchy defines an instance variable with the given name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('name' -> McpSchema string) }
+					  required: #( 'className' 'name' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  hasInstVarNamed: (args at: 'name')
+							  in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_has_slot'
+			 description:
+			 'Answer true if the class hierarchy defines a slot with the given name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('name' -> McpSchema string) }
+					  required: #( 'className' 'name' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  hasSlotNamed: (args at: 'name')
+							  in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_all_inst_var_names'
+			 description:
+			 'Answer every instance variable name known to the class hierarchy.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self allInstVarNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_inst_var_names'
+			 description:
+			 'Answer the instance variable names declared locally on the class (not inherited).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self instVarNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_slot_names'
+			 description:
+			 'Answer the slot names declared locally on the class (not inherited).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self slotNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_all_slots'
+			 description:
+			 'Answer every slot visible in the class hierarchy, one per line, formatted as name=>(SlotClass).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self allSlotsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_local_slots'
+			 description:
+			 'Answer every slot declared locally on the class (not inherited), one per line, formatted as name=>(SlotClass).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self localSlotsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_unreferenced_inst_vars'
+			 description:
+			 'Answer the slot names known to the class hierarchy that are not referenced by any method.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self unreferencedInstVarsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_is_meta'
+			 description:
+			 'Answer true if the class side of the given class is a metaclass. Direct wrapper of Class>>isMeta.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self isMetaClass: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_ensure_protocol'
+			 description:
+			 'Ensure the named protocol exists on the class, creating it if necessary. Returns the protocol name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('protocol' -> McpSchema string) }
+					  required: #( 'className' 'protocol' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  ensureProtocol: (args at: 'protocol')
+							  in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_remove_method'
+			 description:
+			 'Remove the named method from the given class. Returns "removed" on success, "not present" if the method was not present.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('selector' -> McpSchema string) }
+					  required: #( 'className' 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  removeMethod: (args at: 'selector')
+							  from: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_move_class_to_package_tag'
+			 description: 'Move the named class to the given package and tag.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('package' -> McpSchema string).
+							  ('tag' -> McpSchema string) }
+					  required: #( 'className' 'package' 'tag' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  moveClass: (args at: 'className')
+							  toPackage: (args at: 'package')
+							  tag: (args at: 'tag')) ])
+]
+
+{ #category : 'modification' }
+PharoMcpServer >> removeMethod: aSelector from: aClassName [
+	"Remove the named method from the given class. Returns 'removed' on success, 'not present' if the selector was not present, or 'ERROR: ...' on failure."
+
+	| class selector |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	selector := aSelector trimBoth asSymbol.
+	(class includesSelector: selector) ifFalse: [ ^ 'not present' ].
+	class removeSelector: selector.
+	^ 'removed'
 ]
 
 { #category : 'private' }
@@ -684,10 +1040,30 @@ PharoMcpServer >> resourceTemplateDefinitions [
 			   yourself) }
 ]
 
+{ #category : 'reflection' }
+PharoMcpServer >> selectorsInProtocol: aProtocolName of: aClassName [
+	"Answer a textual list of every selector in the given protocol across the class hierarchy."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: (class allSelectorsInProtocol: aProtocolName)
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> server [
 
 	^ server
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> slotNamesOf: aClassName [
+	"Answer a textual list of slot names defined locally on the class (not inherited)."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: class slotNames
 ]
 
 { #category : 'starting' }
@@ -697,10 +1073,14 @@ PharoMcpServer >> start [
 
 	transport := McpHttpTransport new
 		             port: port;
-		             mcpServer: self;
 		             yourself.
-	server := nil.
-	transport start.
+	server := McpServer
+		          name: MCPConstants mcpServerName
+		          version: MCPConstants mcpServerVersion.
+	server transport: transport.
+	self registerToolsOn: server.
+	self registerResourcesOn: server.
+	server start.
 
 	Transcript
 		show: '[PharoMcpServer] MCP server listening on http://localhost:';
@@ -714,20 +1094,13 @@ PharoMcpServer >> start [
 PharoMcpServer >> stop [
 
 	server ifNotNil: [
-		[ server stop ]
-			on: Exception
-			do: [ :ex |
-				Transcript
-					show: ex printString;
-					cr ].
-		server := nil ].
-	transport ifNotNil: [
-		[ transport stop ]
-			on: Exception
-			do: [ :ex |
-				Transcript
-					show: ex printString;
-					cr ] ].
+			[ server stop ]
+				on: Exception
+				do: [ :ex |
+						Transcript
+							show: ex printString;
+							cr ].
+			server := nil ].
 	transport := nil
 ]
 
@@ -748,13 +1121,29 @@ PharoMcpServer >> stringSchema: description [
 	^ schema
 ]
 
+{ #category : 'private - formatting' }
+PharoMcpServer >> stringsAsLines: aCollection [
+	"Answer a newline-joined list of strings, one per line."
+
+	^ String cr join: aCollection asOrderedCollection
+]
+
 { #category : 'starting' }
 PharoMcpServer >> systemInfoString [
 
 	^ String streamContents: [ :s |
-		  s nextPutAll: 'Pharo: '; print: SystemVersion current; lf.
-		  s nextPutAll: 'Packages loaded: '; print: PackageOrganizer default packages size; lf.
-		  s nextPutAll: 'Image: '; nextPutAll: Smalltalk image imagePath; lf ]
+			  s
+				  nextPutAll: 'Pharo: ';
+				  print: SystemVersion current;
+				  lf.
+			  s
+				  nextPutAll: 'Packages loaded: ';
+				  print: PackageOrganizer default packages size;
+				  lf.
+			  s
+				  nextPutAll: 'Image: ';
+				  nextPutAll: Smalltalk image imagePath;
+				  lf ]
 ]
 
 { #category : 'private' }
@@ -863,8 +1252,19 @@ PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
 		  yourself
 ]
 
-{ #category : 'transport' }
+{ #category : 'starting' }
 PharoMcpServer >> transport [
 
 	^ transport
+]
+
+{ #category : 'reflection' }
+PharoMcpServer >> unreferencedInstVarsOf: aClassName [
+	"Answer a textual list of slot names known to the class but not referenced by any method."
+
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines:
+		  (class allUnreferencedInstanceVariables collect: [ :s | s name ])
 ]

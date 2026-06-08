@@ -10,23 +10,6 @@ Class {
 	#package : 'LLM-Pharo-Agent-Tests'
 }
 
-{ #category : 'running' }
-PharoMcpServerTest >> setUp [
-
-	super setUp.
-	server := PharoMcpServer new.
-	generatedClassName := 'PharoMcpServerGeneratedTestClass'.
-	generatedPackageName := 'LLM-Pharo-Agent-Generated-Tests'.
-	self removeGeneratedArtifacts
-]
-
-{ #category : 'running' }
-PharoMcpServerTest >> tearDown [
-
-	self removeGeneratedArtifacts.
-	super tearDown
-]
-
 { #category : 'private' }
 PharoMcpServerTest >> generatedClass [
 
@@ -42,6 +25,23 @@ PharoMcpServerTest >> removeGeneratedArtifacts [
 	(PackageOrganizer default hasPackage: generatedPackageName) ifTrue: [
 		server mutateImageDuring: [
 			PackageOrganizer default removePackage: generatedPackageName ] ]
+]
+
+{ #category : 'running' }
+PharoMcpServerTest >> setUp [
+
+	super setUp.
+	server := PharoMcpServer new.
+	generatedClassName := 'PharoMcpServerGeneratedTestClass'.
+	generatedPackageName := 'LLM-Pharo-Agent-Generated-Tests'.
+	self removeGeneratedArtifacts
+]
+
+{ #category : 'running' }
+PharoMcpServerTest >> tearDown [
+
+	self removeGeneratedArtifacts.
+	super tearDown
 ]
 
 { #category : 'running' }

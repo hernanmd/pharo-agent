@@ -5,7 +5,6 @@ Class {
 		'port',
 		'path',
 		'server',
-		'mcpServer',
 		'responseHolders',
 		'responseMutex'
 	],
@@ -46,7 +45,7 @@ McpHttpTransport class >> port: aPort path: aPath [
 McpHttpTransport >> clearResponseHolder [
 
 	responseMutex critical: [
-		responseHolders removeKey: Processor activeProcess ifAbsent: [  ] ]
+		responseHolders removeKey: Processor activeProcess ifAbsent: [ ] ]
 ]
 
 { #category : 'private' }
@@ -57,10 +56,8 @@ McpHttpTransport >> dispatchBody: aBodyString [
 
 	| holder |
 	holder := Array new: 1.
-	mcpServer ifNotNil: [ ^ mcpServer handleHttpMcpBody: aBodyString ].
 	self registerResponseHolder: holder.
-	[
-	messageHandler ifNotNil: [ messageHandler value: aBodyString ] ]
+	[ messageHandler ifNotNil: [ messageHandler value: aBodyString ] ]
 		ensure: [ self clearResponseHolder ].
 	^ holder first
 ]
@@ -74,11 +71,13 @@ McpHttpTransport >> handleGetRequest: aZnRequest [
 	 bare 'Method Not Allowed' that used to be returned."
 
 	| accept |
-	accept := (aZnRequest headers at: 'Accept' ifAbsent: [ '' ]) asLowercase.
+	accept := (aZnRequest headers at: 'Accept' ifAbsent: [ '' ])
+		          asLowercase.
 	(accept includesSubstring: 'text/event-stream') ifTrue: [
 		^ self methodNotAllowedResponseFor: aZnRequest ].
 
-	^ ZnResponse ok: (ZnEntity
+	^ ZnResponse ok:
+		  (ZnEntity
 			   with: self statusJsonString
 			   type: ZnMimeType applicationJson)
 ]
@@ -95,8 +94,7 @@ McpHttpTransport >> handleRequest: aZnRequest [
 
 	| method requestPath body responseString |
 	requestPath := aZnRequest uri pathPrintString.
-	requestPath = path ifFalse: [
-		^ ZnResponse notFound: aZnRequest uri ].
+	requestPath = path ifFalse: [ ^ ZnResponse notFound: aZnRequest uri ].
 
 	method := aZnRequest method.
 	method = 'GET' ifTrue: [ ^ self handleGetRequest: aZnRequest ].
@@ -109,9 +107,9 @@ McpHttpTransport >> handleRequest: aZnRequest [
 	responseString := [ self dispatchBody: body ]
 		                  on: Error
 		                  do: [ :ex | self jsonErrorFor: ex ].
-	(self isNotificationBody: body) ifTrue: [ ^ self noContentResponse ].
 	responseString ifNil: [ ^ self noContentResponse ].
-	^ self jsonResponseWith: responseString
+	^ ZnResponse ok:
+		  (ZnEntity with: responseString type: ZnMimeType applicationJson)
 ]
 
 { #category : 'private' }
@@ -194,12 +192,12 @@ McpHttpTransport >> methodNotAllowedResponseFor: aZnRequest [
 
 { #category : 'private' }
 McpHttpTransport >> noContentResponse [
-	"JSON-RPC notifications sent over MCP Streamable HTTP must be answered
-	 with HTTP 202 Accepted and no body."
+	"Return an empty JSON object with HTTP 200. JSON-RPC notifications
+	 expect no content, but 200 with {} is the most widely compatible
+	 response across MCP HTTP clients."
 
-	^ ZnResponse new
-		  statusLine: (ZnStatusLine code: 202);
-		  yourself
+	^ ZnResponse ok:
+		  (ZnEntity with: '{}' type: ZnMimeType applicationJson)
 ]
 
 { #category : 'accessing' }
@@ -272,7 +270,9 @@ McpHttpTransport >> statusJsonString [
 			   at: 'status' put: 'ok';
 			   at: 'transport' put: 'http';
 			   at: 'path' put: path;
-			   at: 'message' put: 'MCP endpoint is live. Send JSON-RPC requests via HTTP POST.';
+			   at: 'message'
+			   put:
+				   'MCP endpoint is live. Send JSON-RPC requests via HTTP POST.';
 			   yourself)
 ]
 
@@ -281,8 +281,8 @@ McpHttpTransport >> stop [
 
 	running := false.
 	server ifNotNil: [
-		[ server stop ]
-			on: Error
-			do: [ :ex | "swallow stop errors" ].
-		server := nil ]
+			[ server stop ]
+				on: Error
+				do: [ :ex | "swallow stop errors" ].
+			server := nil ]
 ]
