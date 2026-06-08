@@ -21,8 +21,9 @@ Class {
 	#classVars : [
 		'DefaultInstance'
 	],
-	#category : 'LLM-Pharo-Agent',
-	#package : 'LLM-Pharo-Agent'
+	#category : 'LLM-Pharo-Agent-Core',
+	#package : 'LLM-Pharo-Agent',
+	#tag : 'Core'
 }
 
 { #category : 'accessing' }

@@ -227,10 +227,46 @@ PharoMcpServer >> callToolResultText: aString isError: aBoolean [
 	^ result
 ]
 
+{ #category : 'helpers - class comment' }
+PharoMcpServer >> classCommentOf: aClassName [
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ class comment
+]
+
+{ #category : 'helpers - class comment' }
+PharoMcpServer >> classHasComment: aClassName [
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self booleanAsText: class hasComment
+]
+
 { #category : 'private' }
 PharoMcpServer >> classNamed: aName [
 
 	^ Smalltalk globals at: aName trimBoth asSymbol ifAbsent: [ nil ]
+]
+
+{ #category : 'helpers - class side' }
+PharoMcpServer >> classSideSourceFor: aClassName [
+	| class stream |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ ''ERROR: class not found: '' , aClassName ].
+	class := class classSide.
+	stream := String new writeStream.
+	stream
+		nextPutAll: class definitionString;
+		nextPut: Character lf;
+		nextPut: Character lf;
+		nextPutAll: '"--- methods ---"';
+		nextPut: Character lf.
+	(class selectors asSortedCollection: [:a :b | a < b]) do: [:sel |
+		stream
+			nextPutAll: sel;
+			nextPut: Character lf].
+	^ stream contents
 ]
 
 { #category : 'private' }
@@ -560,6 +596,17 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector [
 	^ (class >> selector) sourceCode
 ]
 
+{ #category : 'helpers - method source' }
+PharoMcpServer >> methodSourceFor: aClassName selector: aSelector classSide: classSideBoolean [
+	| behavior selector |
+	behavior := self behaviorNamed: aClassName classSide: classSideBoolean.
+	behavior ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	selector := aSelector trimBoth asSymbol.
+	(behavior includesSelector: selector) ifFalse: [
+		^ 'ERROR: selector not found: ' , behavior name , '>>' , aSelector ].
+	^ (behavior >> selector) sourceCode
+]
+
 { #category : 'private - formatting' }
 PharoMcpServer >> methodsAsLines: methods [
 	"Answer a newline-joined textual list of method references, one per line."
@@ -615,6 +662,146 @@ PharoMcpServer >> port: aPortNumber [
 	port := aPortNumber asNumber
 ]
 
+{ #category : 'helpers - protocols' }
+PharoMcpServer >> protocolNamesOf: aClassName side: sideString [
+	| behavior |
+	behavior := self behaviorNamed: aClassName classSide: (self booleanFrom: sideString default: false).
+	behavior ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: behavior protocolNames asSortedCollection
+]
+
+{ #category : 'tools' }
+PharoMcpServer >> registerNewToolsOn: aServer [
+
+	"Tool 1: pharo_class_side_source"
+	aServer addTool: (McpTool
+		name: 'pharo_class_side_source'
+		description: 'Return the class definition and selector list for the class side (metaclass) of the given class.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classSideSourceFor: (args at: 'className'))]).
+
+	"Tool 2: pharo_class_side_method_source"
+	aServer addTool: (McpTool
+		name: 'pharo_class_side_method_source'
+		description: 'Return the source of a single method on the class side (metaclass) of the given class.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('selector' -> McpSchema string)}
+			required: #('className' 'selector'))
+		handler: [:args |
+			McpToolResult successText: (self
+				methodSourceFor: (args at: 'className')
+				selector: (args at: 'selector')
+				classSide: true)]).
+
+	"Tool 3: pharo_class_comment"
+	aServer addTool: (McpTool
+		name: 'pharo_class_comment'
+		description: 'Return the class comment of the given class.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classCommentOf: (args at: 'className'))]).
+
+	"Tool 4: pharo_class_has_comment"
+	aServer addTool: (McpTool
+		name: 'pharo_class_has_comment'
+		description: 'Answer true if the given class has a non-empty comment.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classHasComment: (args at: 'className'))]).
+
+	"Tool 5: pharo_subclasses"
+	aServer addTool: (McpTool
+		name: 'pharo_subclasses'
+		description:'Answer the subclass names of the given class. Set direct to true for only direct subclasses, false (default) for all subclasses.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('direct' -> (McpSchema string: 'true for direct subclasses only, false (default) for all subclasses'))}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText: (self
+				subclassesOf: (args at: 'className')
+				direct: (self booleanFrom: (args at: 'direct' ifAbsent: ['false']) default: false))]).
+
+	"Tool 6: pharo_superclasses"
+	aServer addTool: (McpTool
+		name: 'pharo_superclasses'
+		description: 'Answer the superclass names of the given class, from immediate superclass up to Object.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self superclassesOf: (args at: 'className'))]).
+
+	"Tool 7: pharo_compile_method"
+	aServer addTool: (McpTool
+		name: 'pharo_compile_method'
+		description:'Compile a method in the given class. Returns the compiled selector on success. Optionally specify a protocol and/or class side (metaclass).'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('selector' -> (McpSchema string: 'The method selector, used to validate after compilation')).
+				('sourceCode' -> McpSchema string).
+				('protocol' -> (McpSchema string: 'Optional protocol/category name')).
+				('side' -> (McpSchema string: 'instance (default) or class'))}
+			required: #('className' 'selector' 'sourceCode'))
+		handler: [:args |
+			McpToolResult successText: (self
+				compileMethodSource: (args at: 'sourceCode')
+				forClassNamed: (args at: 'className')
+				protocol: (args at: 'protocol' ifAbsent: [nil])
+				classSide: (self booleanFrom: (args at: 'side' ifAbsent: ['instance']) default: false))]).
+
+	"Tool 8: pharo_create_class"
+	aServer addTool: (McpTool
+		name: 'pharo_create_class'
+		description:'Create a new class using Fluid syntax (<<). Requires superclass name, class name, package. Optionally tag, instance variables (comma/space-separated), class variables.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> (McpSchema string: 'Name of the new class to create')).
+				('superclassName' -> (McpSchema string: 'Name of the superclass')).
+				('packageName' -> McpSchema string).
+				('tag' -> (McpSchema string: 'Optional tag within the package')).
+				('instanceVariables' -> (McpSchema string: 'Optional comma or space-separated instance variable names')).
+				('classVariables' -> (McpSchema string: 'Optional comma or space-separated class variable names'))}
+			required: #('className' 'superclassName' 'packageName'))
+		handler: [:args |
+			McpToolResult successText: (self
+				createClassNamed: (args at: 'className')
+				superclassName: (args at: 'superclassName')
+				packageName: (args at: 'packageName')
+				tag: (args at: 'tag' ifAbsent: [nil])
+				instanceVariables: (args at: 'instanceVariables' ifAbsent: [nil])
+				classVariables: (args at: 'classVariables' ifAbsent: [nil]))]).
+
+	"Tool 9: pharo_protocol_names"
+	aServer addTool: (McpTool
+		name: 'pharo_protocol_names'
+		description: 'Answer the list of protocol (category) names for the given class. Set side to class for class-side protocols.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('side' -> (McpSchema string: 'instance (default) or class'))}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText: (self
+				protocolNamesOf: (args at: 'className')
+				side: (args at: 'side' ifAbsent: ['instance']))])
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> registerResourcesOn: aServer [
 
@@ -645,7 +832,7 @@ PharoMcpServer >> registerResourcesOn: aServer [
 							   selector: (params at: 'selector'))) } ])
 ]
 
-{ #category : 'registration' }
+{ #category : 'tools' }
 PharoMcpServer >> registerToolsOn: aServer [
 
 	aServer addTool: (McpTool
@@ -952,7 +1139,8 @@ PharoMcpServer >> registerToolsOn: aServer [
 					 McpToolResult successText: (self
 							  moveClass: (args at: 'className')
 							  toPackage: (args at: 'package')
-							  tag: (args at: 'tag')) ])
+							  tag: (args at: 'tag')) ]).
+	self registerNewToolsOn: aServer
 ]
 
 { #category : 'modification' }
@@ -1126,6 +1314,24 @@ PharoMcpServer >> stringsAsLines: aCollection [
 	"Answer a newline-joined list of strings, one per line."
 
 	^ String cr join: aCollection asOrderedCollection
+]
+
+{ #category : 'helpers - hierarchy' }
+PharoMcpServer >> subclassesOf: aClassName direct: directBoolean [
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: (directBoolean
+		ifTrue: [ class subclasses collect: [:c | c name] ];
+		ifFalse: [ class allSubclasses collect: [:c | c name] ])
+]
+
+{ #category : 'helpers - hierarchy' }
+PharoMcpServer >> superclassesOf: aClassName [
+	| class |
+	class := self classNamed: aClassName.
+	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	^ self stringsAsLines: (class allSuperclasses collect: [:c | c name])
 ]
 
 { #category : 'starting' }

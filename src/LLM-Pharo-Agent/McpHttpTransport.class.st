@@ -6,10 +6,12 @@ Class {
 		'path',
 		'server',
 		'responseHolders',
-		'responseMutex'
+		'responseMutex',
+		'mcpServer'
 	],
-	#category : 'LLM-Pharo-Agent',
-	#package : 'LLM-Pharo-Agent'
+	#category : 'LLM-Pharo-Agent-Core',
+	#package : 'LLM-Pharo-Agent',
+	#tag : 'Core'
 }
 
 { #category : 'as yet unclassified' }
@@ -169,7 +171,7 @@ McpHttpTransport >> jsonResponseWith: aJsonString [
 
 { #category : 'accessing' }
 McpHttpTransport >> mcpServer [
-
+ 
 	^ mcpServer
 ]
 
