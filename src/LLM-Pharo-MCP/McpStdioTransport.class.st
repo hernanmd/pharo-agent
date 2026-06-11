@@ -67,7 +67,7 @@ McpStdioTransport >> sendMessage: aJsonString [
 
 	outputStream
 		nextPutAll: aJsonString;
-		nextPut: Character lf;
+		cr;
 		flush
 ]
 
