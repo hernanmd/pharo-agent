@@ -289,16 +289,16 @@ PharoMcpServer >> classSourceFor: aClassName [
 	^ stream contents
 ]
 
-{ #category : 'private' }
+{ #category : 'compilation' }
 PharoMcpServer >> compileMethodSource: sourceCode forClassNamed: className protocol: protocolName classSide: classSideBoolean [
-
-	| behavior selector |
+	| behavior selector unescaped |
 	behavior := self behaviorNamed: className classSide: classSideBoolean.
 	behavior ifNil: [ ^ 'ERROR: class not found: ' , className ].
+	unescaped := self unescapeSmalltalkSource: sourceCode.
 	selector := self mutateImageDuring: [
-		            behavior
-			            compile: sourceCode
-			            classified: protocolName ].
+		behavior
+			compile: unescaped
+			classified: protocolName ].
 	^ 'Compiled ' , behavior name , '>>' , selector
 ]
 
@@ -343,15 +343,15 @@ PharoMcpServer >> ensureProtocol: aProtocol in: aClassName [
 	^ protocol name asString
 ]
 
-{ #category : 'private' }
+{ #category : 'evaluation' }
 PharoMcpServer >> evaluateSource: aString [
 	"Evaluate the given Smalltalk source and return its printString. Errors
 	 bubble up to the caller (McpTool catches them and reports them as tool errors)."
-
-	| result |
+	| result unescaped |
+	unescaped := self unescapeSmalltalkSource: aString.
 	result := OpalCompiler new
-		          source: aString;
-		          evaluate.
+			source: unescaped;
+			evaluate.
 	^ result ifNil: [ 'nil' ] ifNotNil: [ result printString ]
 ]
 
@@ -457,6 +457,12 @@ PharoMcpServer >> hasSlotNamed: aName in: aClassName [
 		        detect: [ :s | s name = aName asSymbol ]
 		        ifNone: [ ^ self booleanAsText: false ].
 	^ self booleanAsText: (class hasSlot: slot)
+]
+
+{ #category : 'iceberg' }
+PharoMcpServer >> iceRepositoryNamed: aString [
+	"Answer the IceRepository matching aString, or nil if not found"
+	^ IceRepository registry detect: [ :r | r name = aString ] ifNone: [ nil ]
 ]
 
 { #category : 'initialization' }
@@ -670,7 +676,370 @@ PharoMcpServer >> protocolNamesOf: aClassName side: sideString [
 	^ self stringsAsLines: behavior protocolNames asSortedCollection
 ]
 
-{ #category : 'tools' }
+{ #category : 'tool registration' }
+PharoMcpServer >> registerIcebergTools2On: aServer [
+
+	"IceRepository: modifiedPackages"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_modified_packages'
+		description: 'Answer the list of modified package names in the IceRepository.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (self stringsAsLines: (repo modifiedPackages collect: [:p | p name]))]]).
+
+	"IceRepository: packageNamed:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_package_named'
+		description: 'Answer the IcePackage with the given name in the IceRepository, or an error if not found.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('packageName' -> McpSchema string)}
+			required: #('repositoryName' 'packageName'))
+		handler: [:args |
+			| repo pkg |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					pkg := [repo packageNamed: (args at: 'packageName')] on: Error do: [ nil ].
+					pkg
+						ifNil: [ McpToolResult errorText: 'Package not found: ' , (args at: 'packageName') ]
+						ifNotNil: [ McpToolResult successText: pkg printString ]]]).
+
+	"IceRepository: hasIncomingCommits"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_has_incoming'
+		description: 'Answer true if the IceRepository has incoming commits from its remote.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: repo hasIncomingCommits printString]]).
+
+	"IceRepository: hasOutgoingCommits"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_has_outgoing'
+		description: 'Answer true if the IceRepository has outgoing commits to its remote.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: repo hasOutgoingCommits printString]]).
+
+	"IceRepository: loadedPackages"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_loaded_packages'
+		description: 'Answer the list of loaded package names in the IceRepository.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (self stringsAsLines: (repo loadedPackages collect: [:p | p name]))]]).
+
+	"IceRepository: isModified"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_is_modified'
+		description: 'Answer true if the IceRepository has uncommitted changes.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: repo isModified printString]]).
+
+	"IceRepository: includesPackageNamed:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_includes_package'
+		description: 'Answer true if the IceRepository includes a package with the given name.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('packageName' -> McpSchema string)}
+			required: #('repositoryName' 'packageName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (repo includesPackageNamed: (args at: 'packageName')) printString]])
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerIcebergTools3On: aServer [
+
+	"IceRepository: push"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_push'
+		description: 'Push outgoing commits from the IceRepository to its remote. Returns the push result.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo push.
+					McpToolResult successText: 'Pushed']]).
+
+	"IceRepository: pull"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_pull'
+		description: 'Pull incoming commits from the remote into the IceRepository. Returns the pull result.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo pull.
+					McpToolResult successText: 'Pulled']]).
+
+	"IceRepository: remotes"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_remotes'
+		description: 'Answer the list of remote names in the IceRepository.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (self stringsAsLines: (repo remotes collect: [:r | r name]))]]).
+
+	"IceRepository: remoteBranchNames"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_remote_branches'
+		description: 'Answer the list of remote branch names in the IceRepository.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (self stringsAsLines: repo remoteBranchNames)]]).
+
+	"IceRepository: localBranchNames"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_local_branches'
+		description: 'Answer the list of local branch names in the IceRepository.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (self stringsAsLines: repo localBranchNames)]]).
+
+	"IceRepository: remoteNamed:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_remote_named'
+		description: 'Answer the remote with the given name in the IceRepository. Returns the remote URL.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('remoteName' -> McpSchema string)}
+			required: #('repositoryName' 'remoteName'))
+		handler: [:args |
+			| repo remote |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					remote := repo remoteNamed: (args at: 'remoteName') ifAbsent: [ nil ].
+					remote
+						ifNil: [ McpToolResult errorText: 'Remote not found: ' , (args at: 'remoteName') ]
+						ifNotNil: [ McpToolResult successText: remote url ]]]).
+
+	"IceRepository: discardChanges"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_discard_changes'
+		description: 'Discard all uncommitted changes in the IceRepository. Returns ok on success.'
+		inputSchema: (McpSchema
+			object: {('repositoryName' -> McpSchema string)}
+			required: #('repositoryName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo discardChanges.
+					McpToolResult successText: 'Changes discarded']]).
+
+	"IceRepository: notifyPackageModified:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_notify_package_modified'
+		description: 'Notify the IceRepository that the given package has been modified. Useful after external code changes.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('packageName' -> McpSchema string)}
+			required: #('repositoryName' 'packageName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo notifyPackageModified: (args at: 'packageName').
+					McpToolResult successText: 'Notified']])
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerIcebergToolsOn: aServer [
+
+	"IceRepository: commitWithMessage:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_commit'
+		description: 'Commit all changes in the IceRepository with the given message. Returns the commit short ID on success.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('message' -> McpSchema string)}
+			required: #('repositoryName' 'message'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					| commit |
+					commit := repo commitWithMessage: (args at: 'message').
+					McpToolResult successText: commit id printString]]).
+
+	"IceRepository: createBranch:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_create_branch'
+		description: 'Create a new branch with the given name in the IceRepository. Returns the branch name on success.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('branchName' -> McpSchema string)}
+			required: #('repositoryName' 'branchName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo createBranch: (args at: 'branchName').
+					McpToolResult successText: (args at: 'branchName')]]).
+
+	"IceRepository: checkoutBranch:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_checkout_branch'
+		description: 'Checkout the given branch in the IceRepository. Returns the branch name on success.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('branchName' -> McpSchema string)}
+			required: #('repositoryName' 'branchName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo checkoutBranch: (args at: 'branchName').
+					McpToolResult successText: (args at: 'branchName')]]).
+
+	"IceRepository: switchToBranchNamed:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_switch_branch'
+		description: 'Switch the IceRepository to the given branch. Returns the branch name on success.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('branchName' -> McpSchema string)}
+			required: #('repositoryName' 'branchName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo switchToBranchNamed: (args at: 'branchName').
+					McpToolResult successText: (args at: 'branchName')]]).
+
+	"IceRepository: hasLocalBranchNamed:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_has_local_branch'
+		description: 'Answer true if the IceRepository has a local branch with the given name.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('branchName' -> McpSchema string)}
+			required: #('repositoryName' 'branchName'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					McpToolResult successText: (repo hasLocalBranchNamed: (args at: 'branchName')) printString]]).
+
+	"IceRepository: checkout:"
+	aServer addTool: (McpTool
+		name: 'pharo_ice_checkout'
+		description: 'Checkout the given commitish (branch name, tag, or commit ID) in the IceRepository. Returns the commitish on success.'
+		inputSchema: (McpSchema
+			object: {(
+				'repositoryName' -> McpSchema string).
+				('commitish' -> McpSchema string)}
+			required: #('repositoryName' 'commitish'))
+		handler: [:args |
+			| repo |
+			repo := self iceRepositoryNamed: (args at: 'repositoryName').
+			repo
+				ifNil: [ McpToolResult errorText: 'Repository not found: ' , (args at: 'repositoryName') ]
+				ifNotNil: [
+					repo checkout: (args at: 'commitish').
+					McpToolResult successText: (args at: 'commitish')]])
+]
+
+{ #category : 'tool registration' }
 PharoMcpServer >> registerNewToolsOn: aServer [
 
 	"Tool 1: pharo_class_side_source"
@@ -799,7 +1168,11 @@ PharoMcpServer >> registerNewToolsOn: aServer [
 		handler: [:args |
 			McpToolResult successText: (self
 				protocolNamesOf: (args at: 'className')
-				side: (args at: 'side' ifAbsent: ['instance']))])
+				side: (args at: 'side' ifAbsent: ['instance']))]).
+
+	self registerIcebergToolsOn: aServer.
+	self registerIcebergTools2On: aServer.
+	self registerIcebergTools3On: aServer
 ]
 
 { #category : 'accessing' }
@@ -1462,6 +1835,17 @@ PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
 PharoMcpServer >> transport [
 
 	^ transport
+]
+
+{ #category : 'private' }
+PharoMcpServer >> unescapeSmalltalkSource: aString [
+	"Replace common escape sequences with their actual characters.
+	 LLMs often send literal backslash-r/t/n instead of actual CR/TAB/CR characters."
+	| result |
+	result := aString copyReplaceAll: '\r' with: String cr.
+	result := result copyReplaceAll: '\t' with: String tab.
+	result := result copyReplaceAll: '\n' with: String cr.
+	^ result
 ]
 
 { #category : 'reflection' }
