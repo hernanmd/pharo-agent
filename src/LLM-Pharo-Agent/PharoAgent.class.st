@@ -158,14 +158,12 @@ PharoAgent >> exceptionStringFor: anException [
 				  ifNotNil: [ stream nextPutAll: anException messageText ] ]
 ]
 
-{ #category : 'accessing' }
+{ #category : 'initialization' }
 PharoAgent >> initialize [
 
 	super initialize.
 	port := 4044.
 	running := false.
-	serverSocket := nil.
-	serverProcess := nil
 ]
 
 { #category : 'accessing' }
@@ -301,16 +299,6 @@ PharoAgent >> start [
 		cr.
 
 	^ self
-]
-
-{ #category : 'accessing' }
-PharoAgent >> startOn: aPortNumber [
-
-	| agent |
-	agent := self default.
-	agent port: aPortNumber.
-	agent start.
-	^ agent
 ]
 
 { #category : 'accessing' }

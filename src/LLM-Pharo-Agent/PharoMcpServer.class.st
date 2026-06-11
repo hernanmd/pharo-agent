@@ -230,8 +230,9 @@ PharoMcpServer >> callToolResultText: aString isError: aBoolean [
 { #category : 'helpers - class comment' }
 PharoMcpServer >> classCommentOf: aClassName [
 	| class |
-	class := self classNamed: aClassName.
-	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+
+	(class := self classNamed: aClassName)
+		ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ class comment
 ]
 
@@ -251,21 +252,23 @@ PharoMcpServer >> classNamed: aName [
 
 { #category : 'helpers - class side' }
 PharoMcpServer >> classSideSourceFor: aClassName [
+
 	| class stream |
-	class := self classNamed: aClassName.
-	class ifNil: [ ^ ''ERROR: class not found: '' , aClassName ].
+
+	(class := self classNamed: aClassName)
+		ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	class := class classSide.
 	stream := String new writeStream.
 	stream
 		nextPutAll: class definitionString;
-		nextPut: Character lf;
-		nextPut: Character lf;
+		cr;
+		cr;
 		nextPutAll: '"--- methods ---"';
-		nextPut: Character lf.
-	(class selectors asSortedCollection: [:a :b | a < b]) do: [:sel |
-		stream
-			nextPutAll: sel;
-			nextPut: Character lf].
+		cr.
+	(class selectors asSortedCollection: [ :a :b | a < b ]) do: [ :sel |
+			stream
+				nextPutAll: sel;
+				cr ].
 	^ stream contents
 ]
 
@@ -278,27 +281,27 @@ PharoMcpServer >> classSourceFor: aClassName [
 	stream := String new writeStream.
 	stream
 		nextPutAll: class definitionString;
-		nextPut: Character lf;
-		nextPut: Character lf;
+		cr;
+		cr;
 		nextPutAll: '"--- methods ---"';
-		nextPut: Character lf.
+		cr.
 	(class selectors asSortedCollection: [ :a :b | a < b ]) do: [ :sel |
 			stream
 				nextPutAll: sel;
-				nextPut: Character lf ].
+				cr ].
 	^ stream contents
 ]
 
 { #category : 'compilation' }
 PharoMcpServer >> compileMethodSource: sourceCode forClassNamed: className protocol: protocolName classSide: classSideBoolean [
+
 	| behavior selector unescaped |
 	behavior := self behaviorNamed: className classSide: classSideBoolean.
-	behavior ifNil: [ ^ 'ERROR: class not found: ' , className ].
+	behavior 
+		ifNil: [ ^ 'ERROR: class not found: ' , className ].
 	unescaped := self unescapeSmalltalkSource: sourceCode.
 	selector := self mutateImageDuring: [
-		behavior
-			compile: unescaped
-			classified: protocolName ].
+		            behavior compile: unescaped classified: protocolName ].
 	^ 'Compiled ' , behavior name , '>>' , selector
 ]
 
@@ -352,7 +355,9 @@ PharoMcpServer >> evaluateSource: aString [
 	result := OpalCompiler new
 			source: unescaped;
 			evaluate.
-	^ result ifNil: [ 'nil' ] ifNotNil: [ result printString ]
+	^ result 
+		ifNil: [ 'nil' ] 
+		ifNotNil: [ result printString ]
 ]
 
 { #category : 'reflection' }
@@ -462,7 +467,10 @@ PharoMcpServer >> hasSlotNamed: aName in: aClassName [
 { #category : 'iceberg' }
 PharoMcpServer >> iceRepositoryNamed: aString [
 	"Answer the IceRepository matching aString, or nil if not found"
-	^ IceRepository registry detect: [ :r | r name = aString ] ifNone: [ nil ]
+
+	^ IceRepository registry
+		  detect: [ :r | r name = aString ]
+		  ifNone: [ nil ]
 ]
 
 { #category : 'initialization' }
@@ -604,12 +612,16 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector [
 
 { #category : 'helpers - method source' }
 PharoMcpServer >> methodSourceFor: aClassName selector: aSelector classSide: classSideBoolean [
+
 	| behavior selector |
-	behavior := self behaviorNamed: aClassName classSide: classSideBoolean.
-	behavior ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	behavior := self
+		            behaviorNamed: aClassName
+		            classSide: classSideBoolean.
+	behavior 
+		ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	selector := aSelector trimBoth asSymbol.
-	(behavior includesSelector: selector) ifFalse: [
-		^ 'ERROR: selector not found: ' , behavior name , '>>' , aSelector ].
+	(behavior includesSelector: selector) 
+		ifFalse: [ ^ 'ERROR: selector not found: ' , behavior name , '>>' , aSelector ].
 	^ (behavior >> selector) sourceCode
 ]
 
@@ -633,9 +645,13 @@ PharoMcpServer >> moveClass: aClassName toPackage: aPackage tag: aTag [
 
 { #category : 'private' }
 PharoMcpServer >> mutateImageDuring: aBlock [
+	"Evaluate aBlock with EpMonitor disabled, returning the block's result."
 
+	| result |
 	(Smalltalk globals includesKey: #EpMonitor) ifTrue: [
-		^ (Smalltalk globals at: #EpMonitor) disableDuring: aBlock ].
+			(Smalltalk globals at: #EpMonitor) current disableDuring: [
+				result := aBlock value ].
+			^ result ].
 	^ aBlock value
 ]
 
@@ -670,8 +686,11 @@ PharoMcpServer >> port: aPortNumber [
 
 { #category : 'helpers - protocols' }
 PharoMcpServer >> protocolNamesOf: aClassName side: sideString [
+
 	| behavior |
-	behavior := self behaviorNamed: aClassName classSide: (self booleanFrom: sideString default: false).
+	behavior := self
+		            behaviorNamed: aClassName
+		            classSide: (self booleanFrom: sideString default: false).
 	behavior ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ self stringsAsLines: behavior protocolNames asSortedCollection
 ]
@@ -1693,10 +1712,11 @@ PharoMcpServer >> stringsAsLines: aCollection [
 PharoMcpServer >> subclassesOf: aClassName direct: directBoolean [
 	| class |
 	class := self classNamed: aClassName.
-	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+	class 
+		ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ self stringsAsLines: (directBoolean
-		ifTrue: [ class subclasses collect: [:c | c name] ];
-		ifFalse: [ class allSubclasses collect: [:c | c name] ])
+		ifTrue: [ class subclasses collect: #name ]
+		ifFalse: [ class allSubclasses collect: #name])
 ]
 
 { #category : 'helpers - hierarchy' }
@@ -1704,7 +1724,7 @@ PharoMcpServer >> superclassesOf: aClassName [
 	| class |
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
-	^ self stringsAsLines: (class allSuperclasses collect: [:c | c name])
+	^ self stringsAsLines: (class allSuperclasses collect: #name)
 ]
 
 { #category : 'starting' }
@@ -1714,15 +1734,15 @@ PharoMcpServer >> systemInfoString [
 			  s
 				  nextPutAll: 'Pharo: ';
 				  print: SystemVersion current;
-				  lf.
+				  cr.
 			  s
 				  nextPutAll: 'Packages loaded: ';
 				  print: PackageOrganizer default packages size;
-				  lf.
+				  cr.
 			  s
 				  nextPutAll: 'Image: ';
 				  nextPutAll: Smalltalk image imagePath;
-				  lf ]
+				  cr ]
 ]
 
 { #category : 'private' }
