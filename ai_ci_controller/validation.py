@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shlex
+import shutil
 
 from .command import CommandResult, run, run_shell
+from .rag import extract_changed_files
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,53 @@ def run_validation(repo_dir: Path, commands: list[str], *, timeout: int) -> list
             )
         )
     return results
+
+
+def build_validation_commands(
+    repo_dir: Path,
+    *,
+    configured_commands: list[str],
+    diff_text: str,
+    auto_syntax: bool,
+) -> list[str]:
+    commands: list[str] = []
+    if auto_syntax:
+        commands.extend(detect_syntax_commands(repo_dir, diff_text=diff_text))
+    commands.extend(command for command in configured_commands if command)
+    return dedupe(commands)
+
+
+def detect_syntax_commands(repo_dir: Path, *, diff_text: str) -> list[str]:
+    changed = extract_changed_files(diff_text)
+    files = [repo_dir / path for path in changed] if changed else []
+    if not files:
+        files = [
+            path
+            for path in repo_dir.rglob("*")
+            if path.is_file() and ".git" not in path.parts
+        ]
+
+    commands: list[str] = []
+    python_files = existing_relative_files(repo_dir, files, {".py"})
+    if python_files and shutil.which("python"):
+        commands.append(f"python -m py_compile {quote_paths(python_files)}")
+
+    shell_files = existing_relative_files(repo_dir, files, {".sh", ".bash"})
+    if shell_files and shutil.which("bash"):
+        commands.append("bash -n " + " ".join(shlex.quote(path) for path in shell_files))
+
+    json_files = existing_relative_files(repo_dir, files, {".json"})
+    if json_files and shutil.which("python"):
+        commands.extend(
+            f"python -m json.tool {shlex.quote(path)} >/dev/null"
+            for path in json_files[:20]
+        )
+
+    js_files = existing_relative_files(repo_dir, files, {".js", ".mjs", ".cjs"})
+    if js_files and shutil.which("node"):
+        commands.extend(f"node --check {shlex.quote(path)}" for path in js_files[:20])
+
+    return commands
 
 
 def run_diff_check(repo_dir: Path) -> ValidationResult:
@@ -63,3 +113,32 @@ def _format_result(result: CommandResult, *, limit: int = 16_000) -> str:
         return output
     return f"{output[: limit // 2]}\n\n[...snipped...]\n\n{output[-limit // 2 :]}"
 
+
+def existing_relative_files(repo_dir: Path, files: list[Path], suffixes: set[str]) -> list[str]:
+    result: list[str] = []
+    for path in files:
+        if not path.exists() or not path.is_file():
+            continue
+        if path.suffix.lower() not in suffixes:
+            continue
+        try:
+            relative = path.relative_to(repo_dir)
+        except ValueError:
+            continue
+        result.append(str(relative))
+    return sorted(set(result))
+
+
+def quote_paths(paths: list[str]) -> str:
+    return " ".join(shlex.quote(path) for path in paths)
+
+
+def dedupe(commands: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for command in commands:
+        if command in seen:
+            continue
+        seen.add(command)
+        unique.append(command)
+    return unique

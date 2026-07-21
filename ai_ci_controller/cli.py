@@ -22,10 +22,12 @@ from .github import (
     pr_diff,
     pr_metadata,
 )
+from .model_router import ModelPolicy, ModelSelection, classify_model
 from .ollama import OllamaClient
-from .prompts import FIX_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, fix_task_prompt, review_user_prompt
+from .prompts import REVIEW_SYSTEM_PROMPT, fix_task_prompt, review_user_prompt
 from .rag import build_context_pack
 from .validation import assert_validation_passed, render_validation, run_diff_check, run_validation
+from .validation import build_validation_commands
 
 
 DEFAULT_WORK_ROOT = Path.home() / ".cache" / "local-ai-ci-controller"
@@ -36,10 +38,17 @@ PROTECTED_PATH_PATTERNS = [
 ]
 
 
+class QuotaExceeded(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     repo: str
-    model: str
+    model: str | None
+    model_small: str | None
+    model_medium: str | None
+    model_large: str | None
     ollama_base_url: str
     work_root: Path
     test_cmd: str | None
@@ -48,11 +57,25 @@ class RuntimeConfig:
     max_context_chars: int
     max_context_files: int
     max_diff_chars: int
+    daily_limit: int
+    quota_workflow_prefix: str
+    allow_forks: bool
+    auto_syntax: bool
+    extra_context: str
     dry_run: bool
 
     @property
-    def validation_commands(self) -> list[str]:
+    def configured_validation_commands(self) -> list[str]:
         return [cmd for cmd in [self.lint_cmd, self.test_cmd] if cmd]
+
+    @property
+    def model_policy(self) -> ModelPolicy:
+        return ModelPolicy(
+            default_model=self.model,
+            small_model=self.model_small,
+            medium_model=self.model_medium,
+            large_model=self.model_large,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
             issue_pr(args)
         else:
             parser.error("No command selected")
+    except QuotaExceeded as exc:
+        print(f"ai-ci-controller: {exc}", flush=True)
+        return 0
     except Exception as exc:
         print(f"ai-ci-controller: {exc}", flush=True)
         return 1
@@ -109,7 +135,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def add_common(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"), help="OWNER/REPO.")
-    parser.add_argument("--model", default=os.environ.get("MODEL"), help="Ollama model name.")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("MODEL") or os.environ.get("LOCAL_AI_MODEL"),
+        help="Fallback Ollama model name.",
+    )
+    parser.add_argument(
+        "--model-small",
+        default=os.environ.get("MODEL_SMALL") or os.environ.get("LOCAL_AI_MODEL_SMALL"),
+        help="Ollama model for tiny and low-risk changes.",
+    )
+    parser.add_argument(
+        "--model-medium",
+        default=os.environ.get("MODEL_MEDIUM") or os.environ.get("LOCAL_AI_MODEL_MEDIUM"),
+        help="Ollama model for normal code changes.",
+    )
+    parser.add_argument(
+        "--model-large",
+        default=os.environ.get("MODEL_LARGE") or os.environ.get("LOCAL_AI_MODEL_LARGE"),
+        help="Ollama model for large or high-risk changes.",
+    )
     parser.add_argument(
         "--ollama-base-url",
         default=os.environ.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_API_BASE") or "http://127.0.0.1:11434",
@@ -148,6 +193,34 @@ def add_common(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="Maximum diff characters sent to the model prompt.",
     )
     parser.add_argument(
+        "--daily-limit",
+        type=int,
+        default=int(os.environ.get("AI_CI_DAILY_LIMIT", os.environ.get("LOCAL_AI_DAILY_LIMIT", "0"))),
+        help="Maximum Local AI workflow runs per UTC day. 0 disables the quota.",
+    )
+    parser.add_argument(
+        "--quota-workflow-prefix",
+        default=os.environ.get("AI_CI_QUOTA_WORKFLOW_PREFIX", "Local AI"),
+        help="Workflow name prefix counted toward the daily quota.",
+    )
+    parser.add_argument(
+        "--allow-forks",
+        action="store_true",
+        default=str_to_bool(os.environ.get("LOCAL_AI_ALLOW_FORKS", "false")),
+        help="Allow checkout and validation of fork pull requests. Use only with isolation.",
+    )
+    parser.add_argument(
+        "--no-auto-syntax",
+        action="store_true",
+        default=str_to_bool(os.environ.get("AI_CI_DISABLE_AUTO_SYNTAX", "false")),
+        help="Disable built-in syntax checks for changed files.",
+    )
+    parser.add_argument(
+        "--extra-context",
+        default=os.environ.get("AI_CI_EXTRA_CONTEXT", ""),
+        help="Extra PR discussion/comment context for the model prompt.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=os.environ.get("DRY_RUN", "0") == "1",
@@ -160,24 +233,35 @@ def review_pr(args: argparse.Namespace) -> None:
     config = config_from_args(args)
     require_tools(["git", "gh"])
     pr = pr_metadata(config.repo, args.pr)
+    enforce_trust_policy(pr, config)
+    enforce_daily_quota(config)
     run_dir, repo_dir = prepare_pr_checkout(config, args.pr)
     diff_text = pr_diff(config.repo, args.pr)
-    prompt_diff = limit_text(diff_text, config.max_diff_chars)
-    validation_results = run_validation(repo_dir, config.validation_commands, timeout=config.validation_timeout)
+    selection = select_model(config, title=pr.title, body=pr.body, diff_text=diff_text, mode="review")
+    prompt_diff = limit_text(diff_text, diff_budget(config, selection))
+    validation_commands = build_validation_commands(
+        repo_dir,
+        configured_commands=config.configured_validation_commands,
+        diff_text=diff_text,
+        auto_syntax=config.auto_syntax,
+    )
+    validation_results = run_validation(repo_dir, validation_commands, timeout=config.validation_timeout)
     validation_output = render_validation(validation_results)
+    discussion_context = join_context(existing_review_context(config.repo, args.pr), config.extra_context)
     context_pack = build_context_pack(
         repo_dir,
         query=f"{pr.title}\n{pr.body}",
         diff_text=diff_text,
-        max_files=config.max_context_files,
-        max_chars=config.max_context_chars,
+        max_files=context_file_budget(config, selection),
+        max_chars=context_char_budget(config, selection),
     )
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    write_model_selection(artifacts_dir, selection)
     (artifacts_dir / "rag-context.md").write_text(context_pack, encoding="utf-8")
     (artifacts_dir / "validation.txt").write_text(validation_output, encoding="utf-8")
 
-    client = OllamaClient(config.ollama_base_url, config.model)
+    client = OllamaClient(config.ollama_base_url, selection.model)
     content = client.chat(
         [
             {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
@@ -191,6 +275,7 @@ def review_pr(args: argparse.Namespace) -> None:
                     diff_text=prompt_diff,
                     context_pack=context_pack,
                     validation_output=validation_output,
+                    discussion_context=discussion_context,
                 ),
             },
         ],
@@ -198,7 +283,7 @@ def review_pr(args: argparse.Namespace) -> None:
     )
     review = parse_review_json(content)
     safe_review = validate_review_findings(repo_dir, review)
-    body = render_review_comment(pr, safe_review, validation_results)
+    body = render_review_comment(pr, safe_review, validation_results, selection)
     body_file = artifacts_dir / "review-comment.md"
     body_file.write_text(body, encoding="utf-8")
 
@@ -213,18 +298,27 @@ def fix_pr(args: argparse.Namespace) -> None:
     config = config_from_args(args)
     require_tools(["git", "gh", "aider"])
     pr = pr_metadata(config.repo, args.pr)
+    enforce_trust_policy(pr, config)
+    enforce_daily_quota(config)
     run_dir, repo_dir = prepare_pr_checkout(config, args.pr)
     diff_text = pr_diff(config.repo, args.pr)
-    prompt_diff = limit_text(diff_text, config.max_diff_chars)
-    pre_validation = run_validation(repo_dir, config.validation_commands, timeout=config.validation_timeout)
+    selection = select_model(config, title=pr.title, body=pr.body, diff_text=diff_text, mode="fix")
+    prompt_diff = limit_text(diff_text, diff_budget(config, selection))
+    validation_commands = build_validation_commands(
+        repo_dir,
+        configured_commands=config.configured_validation_commands,
+        diff_text=diff_text,
+        auto_syntax=config.auto_syntax,
+    )
+    pre_validation = run_validation(repo_dir, validation_commands, timeout=config.validation_timeout)
     context_pack = build_context_pack(
         repo_dir,
         query=f"{pr.title}\n{pr.body}",
         diff_text=diff_text,
-        max_files=config.max_context_files,
-        max_chars=config.max_context_chars,
+        max_files=context_file_budget(config, selection),
+        max_chars=context_char_budget(config, selection),
     )
-    review_text = existing_review_context(config.repo, args.pr)
+    review_text = join_context(existing_review_context(config.repo, args.pr), config.extra_context)
     task = fix_task_prompt(
         repo=config.repo,
         pr_number=args.pr,
@@ -238,14 +332,15 @@ def fix_pr(args: argparse.Namespace) -> None:
     )
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    write_model_selection(artifacts_dir, selection)
     task_file = artifacts_dir / "fix-task.md"
     task_file.write_text(task, encoding="utf-8")
     (artifacts_dir / "rag-context.md").write_text(context_pack, encoding="utf-8")
 
-    run_aider(config, repo_dir, task_file)
+    run_aider(config, repo_dir, task_file, selection.model)
     enforce_protected_paths(repo_dir)
     final_results = [run_diff_check(repo_dir)]
-    final_results.extend(run_validation(repo_dir, config.validation_commands, timeout=config.validation_timeout))
+    final_results.extend(run_validation(repo_dir, validation_commands, timeout=config.validation_timeout))
     (artifacts_dir / "final-validation.txt").write_text(render_validation(final_results), encoding="utf-8")
     assert_validation_passed(final_results)
     ensure_changes(repo_dir)
@@ -258,7 +353,7 @@ def fix_pr(args: argparse.Namespace) -> None:
         branch_name=branch_name,
         commit_message=f"fix: address AI review for PR #{args.pr}",
         pr_title=f"fix: follow-up for PR #{args.pr}",
-        pr_body=render_fix_pr_body(pr, render_validation(final_results)),
+        pr_body=render_fix_pr_body(pr, render_validation(final_results), selection),
         base=fix_base_for(pr, args.base_mode),
     )
 
@@ -266,6 +361,7 @@ def fix_pr(args: argparse.Namespace) -> None:
 def issue_pr(args: argparse.Namespace) -> None:
     config = config_from_args(args)
     require_tools(["git", "gh", "aider"])
+    enforce_daily_quota(config)
     issue = issue_json(config.repo, args.issue)
     stamp = timestamp()
     run_dir = config.work_root / f"{config.repo.replace('/', '-')}-issue-{args.issue}-{stamp}"
@@ -275,12 +371,19 @@ def issue_pr(args: argparse.Namespace) -> None:
     base = default_branch(config.repo)
     branch_name = f"ai/issue-{args.issue}-{stamp}"
     checkout_base(repo_dir, base, branch_name)
+    selection = select_model(
+        config,
+        title=issue.get("title") or "",
+        body=issue.get("body") or "",
+        diff_text="",
+        mode="issue",
+    )
     context_pack = build_context_pack(
         repo_dir,
         query=f"{issue.get('title', '')}\n{issue.get('body', '')}",
         diff_text="",
-        max_files=config.max_context_files,
-        max_chars=config.max_context_chars,
+        max_files=context_file_budget(config, selection),
+        max_chars=context_char_budget(config, selection),
     )
     task = fix_task_prompt(
         repo=config.repo,
@@ -295,14 +398,21 @@ def issue_pr(args: argparse.Namespace) -> None:
     )
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    write_model_selection(artifacts_dir, selection)
     task_file = artifacts_dir / "issue-task.md"
     task_file.write_text(task, encoding="utf-8")
     (artifacts_dir / "rag-context.md").write_text(context_pack, encoding="utf-8")
 
-    run_aider(config, repo_dir, task_file)
+    run_aider(config, repo_dir, task_file, selection.model)
     enforce_protected_paths(repo_dir)
+    validation_commands = build_validation_commands(
+        repo_dir,
+        configured_commands=config.configured_validation_commands,
+        diff_text=run(["git", "diff", "--patch"], cwd=repo_dir).stdout,
+        auto_syntax=config.auto_syntax,
+    )
     final_results = [run_diff_check(repo_dir)]
-    final_results.extend(run_validation(repo_dir, config.validation_commands, timeout=config.validation_timeout))
+    final_results.extend(run_validation(repo_dir, validation_commands, timeout=config.validation_timeout))
     (artifacts_dir / "final-validation.txt").write_text(render_validation(final_results), encoding="utf-8")
     assert_validation_passed(final_results)
     ensure_changes(repo_dir)
@@ -316,6 +426,7 @@ def issue_pr(args: argparse.Namespace) -> None:
         pr_body=(
             f"Closes #{args.issue}\n\n"
             "This draft PR was generated by the local AI CI controller using a locally hosted model.\n\n"
+            f"Model selection: `{selection.summary()}`\n\n"
             "Human review is required before merge.\n\n"
             f"## Validation\n\n```text\n{render_validation(final_results) or '(no validation commands configured)'}\n```"
         ),
@@ -326,11 +437,16 @@ def issue_pr(args: argparse.Namespace) -> None:
 def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
     if not args.repo:
         raise RuntimeError("Set --repo or GITHUB_REPOSITORY to OWNER/REPO.")
-    if not args.model:
-        raise RuntimeError("Set --model or MODEL to the local Ollama model name.")
+    if not any([args.model, args.model_small, args.model_medium, args.model_large]):
+        raise RuntimeError(
+            "Set --model/MODEL or at least one tier model: MODEL_SMALL, MODEL_MEDIUM, MODEL_LARGE."
+        )
     return RuntimeConfig(
         repo=args.repo,
         model=args.model,
+        model_small=args.model_small,
+        model_medium=args.model_medium,
+        model_large=args.model_large,
         ollama_base_url=args.ollama_base_url,
         work_root=args.work_root,
         test_cmd=args.test_cmd,
@@ -339,6 +455,11 @@ def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         max_context_chars=args.max_context_chars,
         max_context_files=args.max_context_files,
         max_diff_chars=args.max_diff_chars,
+        daily_limit=args.daily_limit,
+        quota_workflow_prefix=args.quota_workflow_prefix,
+        allow_forks=args.allow_forks,
+        auto_syntax=not args.no_auto_syntax,
+        extra_context=args.extra_context,
         dry_run=args.dry_run,
     )
 
@@ -346,6 +467,54 @@ def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
 def require_tools(names: list[str]) -> None:
     for name in names:
         require_binary(name)
+
+
+def enforce_trust_policy(pr: PullRequest, config: RuntimeConfig) -> None:
+    if pr.same_repository or config.allow_forks:
+        return
+    raise RuntimeError(
+        f"Refusing to check out fork PR #{pr.number} from {pr.head_repo_name_with_owner}. "
+        "Set LOCAL_AI_ALLOW_FORKS=true only after isolating the runner per job."
+    )
+
+
+def enforce_daily_quota(config: RuntimeConfig) -> None:
+    if config.daily_limit <= 0:
+        return
+    start = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    result = run(
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            config.repo,
+            "--created",
+            f">={start}",
+            "--limit",
+            "300",
+            "--json",
+            "databaseId,workflowName,createdAt,status",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not inspect today's workflow quota:\n{result.combined_output}")
+    runs = json.loads(result.stdout or "[]")
+    used = sum(
+        1
+        for item in runs
+        if str(item.get("workflowName") or "").startswith(config.quota_workflow_prefix)
+    )
+    if used > config.daily_limit:
+        raise QuotaExceeded(
+            f"daily quota reached for `{config.quota_workflow_prefix}` workflows: "
+            f"{used}/{config.daily_limit} runs since {start}. Skipping this job."
+        )
+    print(
+        f"Daily Local AI quota: {used}/{config.daily_limit} "
+        f"runs since {start} for workflow prefix `{config.quota_workflow_prefix}`."
+    )
 
 
 def prepare_pr_checkout(config: RuntimeConfig, pr_number: int) -> tuple[Path, Path]:
@@ -408,6 +577,7 @@ def render_review_comment(
     pr: PullRequest,
     review: dict[str, Any],
     validation_results: list,
+    model_selection: ModelSelection,
 ) -> str:
     findings = review.get("findings") or []
     lines = [
@@ -416,6 +586,7 @@ def render_review_comment(
         review.get("summary") or "No summary returned.",
         "",
         f"Risk level: `{review.get('risk_level', 'medium')}`",
+        f"Model: `{model_selection.summary()}`",
         "",
     ]
     if findings:
@@ -490,14 +661,14 @@ def existing_review_context(repo: str, pr_number: int) -> str:
         state = review.get("state") or "COMMENTED"
         if body:
             blocks.append(f"Review by {author} ({state}):\n{body}")
-    return "\n\n".join(blocks[-12:])
+    return limit_text("\n\n".join(blocks[-12:]), 40_000)
 
 
-def run_aider(config: RuntimeConfig, repo_dir: Path, task_file: Path) -> None:
+def run_aider(config: RuntimeConfig, repo_dir: Path, task_file: Path, model: str) -> None:
     args = [
         "aider",
         "--model",
-        f"ollama_chat/{config.model}",
+        f"ollama_chat/{model}",
         "--message-file",
         str(task_file),
         "--no-auto-commits",
@@ -588,10 +759,15 @@ def fix_base_for(pr: PullRequest, mode: str) -> str:
     return pr.base_ref
 
 
-def render_fix_pr_body(pr: PullRequest, validation_output: str) -> str:
+def render_fix_pr_body(
+    pr: PullRequest,
+    validation_output: str,
+    model_selection: ModelSelection,
+) -> str:
     return (
         f"Follow-up fixes for #{pr.number}.\n\n"
         "This draft PR was generated by the local AI CI controller using a locally hosted model.\n\n"
+        f"Model selection: `{model_selection.summary()}`\n\n"
         "Human review is required before merge.\n\n"
         f"Source PR: {pr.url}\n\n"
         "## Validation\n\n"
@@ -619,6 +795,60 @@ def timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+def select_model(
+    config: RuntimeConfig,
+    *,
+    title: str,
+    body: str,
+    diff_text: str,
+    mode: str,
+) -> ModelSelection:
+    selection = classify_model(
+        config.model_policy,
+        title=title,
+        body=body,
+        diff_text=diff_text,
+        mode=mode,
+    )
+    print(f"Selected model: {selection.summary()}")
+    return selection
+
+
+def write_model_selection(artifacts_dir: Path, selection: ModelSelection) -> None:
+    (artifacts_dir / "model-selection.json").write_text(selection.to_json(), encoding="utf-8")
+
+
+def context_char_budget(config: RuntimeConfig, selection: ModelSelection) -> int:
+    tier = base_tier(selection)
+    if tier == "small":
+        return min(config.max_context_chars, 30_000)
+    if tier == "medium":
+        return min(config.max_context_chars, 70_000)
+    return config.max_context_chars
+
+
+def context_file_budget(config: RuntimeConfig, selection: ModelSelection) -> int:
+    tier = base_tier(selection)
+    if tier == "small":
+        return min(config.max_context_files, 10)
+    if tier == "medium":
+        return min(config.max_context_files, 20)
+    return config.max_context_files
+
+
+def diff_budget(config: RuntimeConfig, selection: ModelSelection) -> int:
+    tier = base_tier(selection)
+    if tier == "small":
+        return min(config.max_diff_chars, 40_000)
+    if tier == "medium":
+        return min(config.max_diff_chars, 90_000)
+    return config.max_diff_chars
+
+
+def base_tier(selection: ModelSelection) -> str:
+    return selection.tier.split("/", 1)[0]
+
+
 def limit_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -626,3 +856,10 @@ def limit_text(text: str, max_chars: int) -> str:
     tail = max_chars - head
     return f"{text[:head]}\n\n[...snipped by controller...]\n\n{text[-tail:]}"
 
+
+def join_context(*parts: str) -> str:
+    return "\n\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def str_to_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}

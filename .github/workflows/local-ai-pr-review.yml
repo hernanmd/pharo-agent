@@ -1,6 +1,12 @@
 name: Local AI PR Review
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       pr:
@@ -17,6 +23,7 @@ on:
           - "true"
 
 permissions:
+  actions: read
   contents: read
   issues: write
   pull-requests: write
@@ -24,10 +31,34 @@ permissions:
 jobs:
   review:
     runs-on: [self-hosted, local-ai]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        (
+          github.event.pull_request.head.repo.full_name == github.repository ||
+          vars.LOCAL_AI_ALLOW_FORKS == 'true'
+        )
+      ) ||
+      (
+        github.event_name == 'pull_request_review' &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association) &&
+        (
+          github.event.pull_request.head.repo.full_name == github.repository ||
+          vars.LOCAL_AI_ALLOW_FORKS == 'true'
+        )
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/ai review') &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      )
     env:
       OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
     concurrency:
-      group: local-ai-pr-review-${{ github.repository }}-${{ inputs.pr }}
+      group: local-ai-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
 
     steps:
@@ -44,10 +75,41 @@ jobs:
           curl -fsS "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}/api/tags" >/dev/null
 
       - name: Review pull request
-        run: ./scripts/ai-ci-controller review-pr --repo "$GITHUB_REPOSITORY" --pr "${{ inputs.pr }}"
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request|pull_request_review)
+              PR_NUMBER="$PULL_REQUEST_NUMBER"
+              ;;
+            issue_comment)
+              PR_NUMBER="$ISSUE_NUMBER"
+              ;;
+            workflow_dispatch)
+              PR_NUMBER="$DISPATCH_PR_NUMBER"
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "Could not determine pull request number." >&2
+            exit 1
+          fi
+
+          ./scripts/ai-ci-controller review-pr --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER"
         env:
           GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ vars.LOCAL_AI_MODEL }}
+          MODEL: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
+          MODEL_SMALL: ${{ vars.LOCAL_AI_MODEL_SMALL || vars.LOCAL_AI_MODEL }}
+          MODEL_MEDIUM: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
+          MODEL_LARGE: ${{ vars.LOCAL_AI_MODEL_LARGE || vars.LOCAL_AI_MODEL }}
           LINT_CMD: ${{ vars.LOCAL_AI_LINT_CMD }}
           TEST_CMD: ${{ vars.LOCAL_AI_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.LOCAL_AI_DAILY_LIMIT || '10' }}
+          LOCAL_AI_ALLOW_FORKS: ${{ vars.LOCAL_AI_ALLOW_FORKS || 'false' }}
+          AI_CI_EXTRA_CONTEXT: ${{ github.event.comment.body || github.event.review.body || '' }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}

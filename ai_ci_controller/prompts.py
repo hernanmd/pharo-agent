@@ -40,6 +40,7 @@ def review_user_prompt(
     diff_text: str,
     context_pack: str,
     validation_output: str,
+    discussion_context: str,
 ) -> str:
     return f"""Repository: {repo}
 Pull request: #{pr_number}
@@ -51,6 +52,11 @@ PR body:
 Validation output before review:
 ```text
 {validation_output or "(No validation command output was provided.)"}
+```
+
+PR discussion, reviews, and recent trigger comment:
+```text
+{discussion_context or "(No PR discussion context was provided.)"}
 ```
 
 Diff:

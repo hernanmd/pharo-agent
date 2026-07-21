@@ -17,6 +17,7 @@ on:
           - "true"
 
 permissions:
+  actions: read
   contents: write
   issues: read
   pull-requests: write
@@ -48,8 +49,12 @@ jobs:
         run: ./scripts/ai-ci-controller issue-pr --repo "$GITHUB_REPOSITORY" --issue "${{ inputs.issue }}"
         env:
           GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ vars.LOCAL_AI_MODEL }}
+          MODEL: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
+          MODEL_SMALL: ${{ vars.LOCAL_AI_MODEL_SMALL || vars.LOCAL_AI_MODEL }}
+          MODEL_MEDIUM: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
+          MODEL_LARGE: ${{ vars.LOCAL_AI_MODEL_LARGE || vars.LOCAL_AI_MODEL }}
           LINT_CMD: ${{ vars.LOCAL_AI_LINT_CMD }}
           TEST_CMD: ${{ vars.LOCAL_AI_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.LOCAL_AI_DAILY_LIMIT || '10' }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
           UNATTENDED: "1"
