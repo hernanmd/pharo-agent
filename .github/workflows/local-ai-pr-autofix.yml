@@ -1,0 +1,68 @@
+name: Local AI PR Autofix
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to fix
+        required: true
+        type: string
+      dry_run:
+        description: Commit locally but do not push or open a draft PR
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      base_mode:
+        description: Base branch for generated fix PR
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - pr-head
+          - target-base
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  autofix:
+    runs-on: [self-hosted, local-ai]
+    env:
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
+    concurrency:
+      group: local-ai-pr-autofix-${{ github.repository }}-${{ inputs.pr }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check local runner dependencies
+        run: |
+          command -v git
+          command -v gh
+          command -v aider
+          python --version
+          curl -fsS "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}/api/tags" >/dev/null
+
+      - name: Create draft fix pull request
+        run: >
+          ./scripts/ai-ci-controller fix-pr
+          --repo "$GITHUB_REPOSITORY"
+          --pr "${{ inputs.pr }}"
+          --base-mode "${{ inputs.base_mode }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.LOCAL_AI_MODEL }}
+          LINT_CMD: ${{ vars.LOCAL_AI_LINT_CMD }}
+          TEST_CMD: ${{ vars.LOCAL_AI_TEST_CMD }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
+          UNATTENDED: "1"

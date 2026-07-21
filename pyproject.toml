@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-ai-ci-controller"
+version = "0.1.0"
+description = "Self-hosted CI controller for Ollama-powered GitHub PR review and draft fix PRs."
+readme = "docs/local-ai-ci.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ai-ci-controller = "ai_ci_controller.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ai_ci_controller*"]
+
