@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run the test suite
+        run: python -m pytest tests -q
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+
+      - name: Lint
+        run: ruff check .
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the package
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install it and check the entry point resolves
+        run: |
+          python -m pip install dist/*.whl
+          ai-ci-controller --help > /dev/null
+          for command in review-pr fix-pr issue-pr respond-review sweep-issues selfcheck bench; do
+            ai-ci-controller "$command" --help > /dev/null || {
+              echo "subcommand $command is broken" >&2
+              exit 1
+            }
+          done
+
+  workflows:
+    name: workflow and fixture sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install PyYAML
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Every workflow parses and is bounded
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          import yaml
+
+          failures = []
+          for path in sorted(Path(".github/workflows").glob("*.yml")):
+              data = yaml.safe_load(path.read_text())
+              for name, job in data["jobs"].items():
+                  if "timeout-minutes" not in job:
+                      failures.append(f"{path.name}:{name} has no timeout-minutes")
+              print(f"ok  {path.name}  ({len(data['jobs'])} job(s))")
+
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Quota-consuming workflows all match the quota prefix
+        run: |
+          python - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+          import yaml
+
+          source = Path("ai_ci_controller/cli.py").read_text()
+          prefix = re.search(r'AI_CI_QUOTA_WORKFLOW_PREFIX",\s*"([^"]+)"', source).group(1)
+
+          # Commands that call enforce_daily_quota. A workflow running one of these
+          # must be counted by the quota; anything else must not be, or diagnostics
+          # would silently eat the daily PR budget.
+          billed = ("review-pr", "fix-pr", "issue-pr", "respond-review", "sweep-issues")
+
+          failures = []
+          for path in sorted(Path(".github/workflows").glob("*.yml")):
+              raw = path.read_text()
+              name = yaml.safe_load(raw)["name"]
+              runs_billed = any(f"ai-ci-controller {command}" in raw for command in billed)
+              matches = name.startswith(prefix)
+
+              if runs_billed and not matches:
+                  failures.append(f"{path.name}: runs billed work but {name!r} escapes the quota")
+              if matches and not runs_billed:
+                  failures.append(f"{path.name}: {name!r} is counted by the quota but does no billed work")
+              print(f"ok  {path.name:38} billed={runs_billed} counted={matches}")
+
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          print(f"\nquota prefix {prefix!r} is exactly right")
+          PY
+
+      - name: Benchmark tasks and the example skill still load
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from ai_ci_controller.bench import load_tasks
+          from ai_ci_controller.skills import load_skills
+
+          tasks = load_tasks(Path("benchmarks/tasks"))
+          assert tasks, "no benchmark tasks loaded"
+          for task in tasks:
+              assert task.prompt.strip(), f"{task.name} has an empty prompt"
+              if task.kind == "selector":
+                  assert task.expect.get("ground_truth"), f"{task.name} has no ground_truth"
+              if task.kind == "review":
+                  assert task.expect.get("expect_file"), f"{task.name} has no expect_file"
+          print(f"ok  {len(tasks)} benchmark task(s)")
+
+          skills = load_skills(Path("."))
+          assert skills, "the example skill did not load"
+          print(f"ok  {len(skills)} skill(s): {[s.name for s in skills]}")
+          PY

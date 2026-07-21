@@ -125,7 +125,11 @@ def parse_skill(text: str, *, path: str, fallback_name: str) -> Skill | None:
     )
 
 
+<<<<<<< HEAD
 def parse_frontmatter(text: str) -> dict[str, object]:
+=======
+def parse_frontmatter(text: str, *, list_keys: set[str] = LIST_KEYS) -> dict[str, object]:
+>>>>>>> 03175f2 (second version)
     fields: dict[str, object] = {}
     current_list_key: str | None = None
 
@@ -153,6 +157,11 @@ def parse_frontmatter(text: str) -> dict[str, object]:
             current_list_key = key
             continue
         if key in LIST_KEYS:
+        if not value and key in list_keys:
+            fields[key] = []
+            current_list_key = key
+            continue
+        if key in list_keys:
             fields[key] = parse_list(value)
             continue
         if key in BOOL_KEYS:
@@ -167,6 +176,7 @@ def parse_frontmatter(text: str) -> dict[str, object]:
         fields[key] = scalar(value)
 
     for key in LIST_KEYS:
+    for key in list_keys:
         fields.setdefault(key, [])
     return fields
 

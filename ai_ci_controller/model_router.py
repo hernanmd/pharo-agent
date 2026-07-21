@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .rag import extract_changed_files
 
-
 DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
 TEST_HINTS = {
     "/test/",

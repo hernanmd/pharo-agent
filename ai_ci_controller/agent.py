@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from .command import run_shell
 from .ollama import OllamaClient
 from .pharo import PharoMcpClient, PharoUnavailable
 from .rag import read_text
-
 
 MAX_TOOL_OUTPUT = 6_000
 MAX_LISTED_FILES = 200

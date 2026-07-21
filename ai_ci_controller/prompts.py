@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 REVIEW_SYSTEM_PROMPT = """You are a senior software reviewer running inside CI.
 Review only the submitted pull request. Focus on correctness bugs, security issues,
 test gaps, regressions, and maintainability problems that can block merge.

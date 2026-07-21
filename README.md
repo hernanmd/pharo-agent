@@ -39,6 +39,95 @@ flowchart TD
 - Limits Pharo Agent jobs to 10 per repository per UTC day by default.
 - Responds to `/ai review` and `/ai fix` comments.
 - Opens draft PRs only. Human review is still required.
+- **Tests itself** — unit CI, a runner self-check, and a scored Pharo capability benchmark.
+
+## Teaching It Your Project
+
+Skills live in the **target** repository under `.ai/skills/*.md`, versioned with the code:
+
+```markdown
+---
+name: pharo
+description: How to read, write, and verify Pharo code here
+when: ["src/**/*.st", "**/*.class.st"]
+tools: [pharo_eval, pharo_class_source, pharo_method_source]
+validate: ["./bin/run-pharo-tests"]
+---
+
+The image is the source of truth, not your memory. Before using any selector,
+call pharo_class_source to confirm it exists...
+```
+
+A skill loads when its `when` globs match a changed file (or, for issue runs, any file in the repo). Its `tools` decide whether a Pharo image boots. Its `validate` commands become both a validation gate and the **only** commands the agent is permitted to run — there is no general shell tool.
+
+See [`.ai/skills/pharo.md`](.ai/skills/pharo.md) for a complete working example.
+
+## The Live Image
+
+When a run touches `.class.st` files, the controller copies your base image, loads the project, and starts `PharoMcpServer` on a free port for that run only. The agent can then check reality instead of guessing:
+
+```
+pharo_class_source(className: "OrderedCollection")   → the real selector list
+pharo_eval(code: "1 bogusSelector")                  → MessageNotUnderstood
+```
+
+This is what makes Smalltalk viable for a local model: selector hallucination gets caught during investigation rather than in your PR. The image is a scratchpad — every persisted edit still goes through Tonel files on disk and the normal validation gate.
+
+Set `PHARO_VM` and `PHARO_IMAGE` on the runner, plus either `PHARO_BASELINE` or a `.ai/pharo-load.st` in the target repo. If Pharo is not configured or fails to boot, the controller says so and continues without it.
+
+## Reviewing Its PRs
+
+Review a PR the AI opened and it answers you thread by thread, with one of three verdicts:
+
+```
+**Agreed** — fixed in `9f2c1ab`.
+Correct, `count` can be nil before `initialize` runs.
+```
+
+````
+**I think this one is not right** — leaving it for you to decide.
+`addAll:` does exist on OrderedCollection — I checked in the image before writing it.
+
+Evidence:
+
+```text
+pharo_eval: (OrderedCollection new addAll: #(1 2); yourself)
+-> an OrderedCollection(1 2)
+```
+````
+
+```
+**Need a steer before changing this.**
+Do you want the timeout per-evaluation or per-connection?
+```
+
+Everything it agrees with lands as **one commit on the same branch**, and only if the whole validation gate passes. If validation fails it says so rather than claiming a fix that does not exist. Threads it disputes stay unresolved on purpose — those need your decision, not its.
+
+This is the part that needed the live image. A local model asked "are you sure?" will fold and break working code. This one can check and answer.
+
+Triggers on a submitted review, an inline review comment, or `/ai reply`. Only on `ai/issue-*` and `ai/fix-pr-*` branches unless you set `PHARO_AGENT_RESPOND_ANY_PR=true`. Use `PHARO_AGENT_RESPOND_NO_AMEND=true` if you want words only and no commits.
+
+It cannot talk to itself: comments made with `GITHUB_TOKEN` do not trigger workflows, every posted body carries an `<!-- ai-ci-controller -->` marker, and a thread only counts as pending when the last word was yours. Resolve a thread to end it.
+
+## Does It Actually Work?
+
+Three commands, three different questions:
+
+```bash
+python -m pytest tests -q                      # did I break the controller?
+./scripts/ai-ci-controller selfcheck           # can this machine do the work?
+./scripts/ai-ci-controller bench --bench-model <model>   # can the model do Pharo?
+```
+
+`selfcheck` verifies Ollama answers, your models are pulled, and the Pharo image genuinely boots and evaluates `3 + 4`. It exits non-zero on a required failure, so it gates a new runner.
+
+`bench` scores ten seeded tasks: can the model write Tonel that parses, does it invent selectors that do not exist, does it find a seeded bug. Selector ground truth comes from the live image at run time, not a hardcoded answer. Run it with and without `--no-tools` — the gap is what the image is worth for your model.
+
+The benchmark **never gates**; local output varies too much for a threshold to mean anything. Read the trend.
+
+Benchmark an instruction-tuned model. Completion-tuned checkpoints score near zero because the tasks are instructions, not continuations — that measures the mismatch, not Pharo knowledge.
+
+`.github/workflows/ci.yml` runs the suite on Python 3.11/3.12/3.13 plus ruff on every push, on GitHub-hosted runners — no Ollama or Pharo needed, the tests are hermetic.
 
 ## Teaching It Your Project
 

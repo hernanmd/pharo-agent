@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from .agent import build_tools, run_agent
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from .agent import build_tools, pharo_tools, run_agent
+from .bench import load_tasks, render_scorecard, run_bench
 from .command import require_binary, run
 from .conversation import (
     AI_MARKER,
@@ -48,6 +55,7 @@ from .prompts import (
 )
 from .rag import build_context_pack, extract_changed_files
 from .repomap import build_repo_map
+from .selfcheck import render_checks, run_selfcheck
 from .skills import SkillSelection, load_skills, render_skills, select_skills
 from .validation import (
     assert_validation_passed,
@@ -143,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
             respond_review(args)
         elif args.command == "sweep-issues":
             return sweep_issues(args)
+        elif args.command == "selfcheck":
+            return selfcheck(args)
+        elif args.command == "bench":
+            return bench(args)
         else:
             parser.error("No command selected")
     except QuotaExceeded as exc:
@@ -233,6 +245,61 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=str_to_bool(os.environ.get("AI_CI_STOP_ON_ERROR", "false")),
         help="Abort the sweep on the first failing issue instead of continuing.",
+    )
+
+    check_parser = add_common(
+        subparsers.add_parser(
+            "selfcheck",
+            help="Verify this runner can actually do the work: Ollama, models, Pharo, aider, gh.",
+        )
+    )
+    check_parser.add_argument(
+        "--require-pharo",
+        action="store_true",
+        default=str_to_bool(os.environ.get("AI_CI_REQUIRE_PHARO", "false")),
+        help="Treat a missing or unbootable Pharo image as a failure rather than a warning.",
+    )
+    check_parser.add_argument(
+        "--require-aider",
+        action="store_true",
+        default=str_to_bool(os.environ.get("AI_CI_REQUIRE_AIDER", "true")),
+        help="Treat a missing aider as a failure. On by default.",
+    )
+
+    bench_parser = add_common(
+        subparsers.add_parser(
+            "bench",
+            help="Score whether the configured model can actually write and reason about Pharo.",
+        )
+    )
+    bench_parser.add_argument(
+        "--tasks-dir",
+        type=Path,
+        default=Path(os.environ.get("AI_CI_BENCH_TASKS", "benchmarks/tasks")),
+        help="Directory of benchmark task markdown files.",
+    )
+    bench_parser.add_argument(
+        "--no-tools",
+        action="store_true",
+        default=str_to_bool(os.environ.get("AI_CI_BENCH_NO_TOOLS", "false")),
+        help="Run the model raw, with no image access. Use to measure what grounding is worth.",
+    )
+    bench_parser.add_argument(
+        "--bench-model",
+        default=os.environ.get("AI_CI_BENCH_MODEL"),
+        help="Model to benchmark. Defaults to the medium tier, then the fallback model.",
+    )
+    bench_parser.add_argument(
+        "--bench-timeout",
+        type=int,
+        default=int(os.environ.get("AI_CI_BENCH_TIMEOUT", "120")),
+        help="Per-task model timeout in seconds. A rambling model should not hold the whole run.",
+    )
+    bench_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path(os.environ.get("AI_CI_BENCH_REPORT", "")) if os.environ.get("AI_CI_BENCH_REPORT") else None,
+        help="Write the scorecard markdown to this path as well as stdout.",
     )
 
     return parser
@@ -563,6 +630,111 @@ def issue_pr(args: argparse.Namespace) -> None:
     require_tools(["git", "gh", "aider"])
     enforce_daily_quota(config)
     print(implement_issue(config, args.issue))
+
+
+def selfcheck(args: argparse.Namespace) -> int:
+    models = [
+        model
+        for model in [args.model, args.model_small, args.model_medium, args.model_large]
+        if model
+    ]
+    work_dir = Path(tempfile.mkdtemp(prefix="pharo-agent-selfcheck-"))
+    try:
+        checks = run_selfcheck(
+            ollama_base_url=args.ollama_base_url,
+            models=models,
+            work_dir=work_dir,
+            repo_dir=Path.cwd(),
+            require_pharo=args.require_pharo,
+            require_aider=args.require_aider,
+        )
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    report = render_checks(checks)
+    print(report)
+    write_step_summary(report)
+    return 1 if any(check.blocking for check in checks) else 0
+
+
+def bench(args: argparse.Namespace) -> int:
+    tasks = load_tasks(args.tasks_dir)
+    if not tasks:
+        print(f"No benchmark tasks found in {args.tasks_dir}.")
+        return 1
+
+    model = (
+        args.bench_model
+        or args.model_medium
+        or args.model
+        or args.model_large
+        or args.model_small
+    )
+    if not model:
+        raise RuntimeError("Set --bench-model, --model, or one of the tier models to benchmark.")
+
+    print(f"Benchmarking `{model}` on {len(tasks)} task(s).")
+    work_dir = Path(tempfile.mkdtemp(prefix="pharo-agent-bench-"))
+    image: PharoImage | None = None
+    pharo_client: PharoMcpClient | None = None
+    tools = []
+
+    try:
+        if args.no_tools:
+            print("Running ungrounded: no image, no tools.")
+        else:
+            image, pharo_client = start_bare_image(work_dir)
+            if pharo_client is not None:
+                tools = pharo_tools(pharo_client)
+
+        report = run_bench(
+            OllamaClient(args.ollama_base_url, model, timeout_seconds=args.bench_timeout),
+            tasks,
+            pharo=pharo_client,
+            tools=tools,
+        )
+    finally:
+        if image is not None:
+            image.stop()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    scorecard = render_scorecard(report)
+    print(scorecard)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(scorecard, encoding="utf-8")
+        print(f"Scorecard written to {args.report}")
+    write_step_summary(scorecard)
+    return 0
+
+
+def start_bare_image(work_dir: Path) -> tuple[PharoImage | None, PharoMcpClient | None]:
+    config = replace(PharoConfig.from_environment(), baseline=None, load_script="")
+    if not config.enabled:
+        print("Pharo is not configured, so selector tasks will be skipped.")
+        return None, None
+
+    try:
+        image = PharoImage(config=config, repo_dir=work_dir, work_dir=work_dir / "image")
+        image.start()
+        client = image.client()
+        client.initialize()
+        print(f"Grounded against a bare Pharo image on {image.endpoint}")
+        return image, client
+    except PharoUnavailable as exc:
+        print(f"Pharo image unavailable, selector tasks will be skipped: {exc}")
+        return None, None
+
+
+def write_step_summary(markdown: str) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write(markdown + "\n")
+    except OSError as exc:
+        print(f"Could not write the job summary: {exc}")
 
 
 def respond_review(args: argparse.Namespace) -> None:
@@ -923,6 +1095,7 @@ def render_response_summary(
     elif amend.get("attempted"):
         lines.append(f"No commit was pushed: {amend['detail']}.")
     elif counts["agree"]:
+    elif amend.get("attempted") or counts["agree"]:
         lines.append(f"No commit was pushed: {amend['detail']}.")
 
     if counts["disagree"]:
@@ -1354,7 +1527,7 @@ def enforce_trust_policy(pr: PullRequest, config: RuntimeConfig) -> None:
 def enforce_daily_quota(config: RuntimeConfig) -> None:
     if config.daily_limit <= 0:
         return
-    start = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    start = datetime.now(UTC).strftime("%Y-%m-%dT00:00:00Z")
     result = run(
         [
             "gh",
@@ -1456,10 +1629,10 @@ def repo_file_list(repo_dir: Path, *, limit: int = 5_000) -> list[str]:
 def parse_review_json(content: str) -> dict[str, Any]:
     try:
         payload = json.loads(content)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         match = re.search(r"\{.*\}", content, flags=re.DOTALL)
         if not match:
-            raise RuntimeError(f"Model did not return JSON:\n{content}")
+            raise RuntimeError(f"Model did not return JSON:\n{content}") from exc
         payload = json.loads(match.group(0))
     if not isinstance(payload, dict):
         raise RuntimeError("Model review response was not a JSON object.")
@@ -1751,7 +1924,7 @@ def default_branch(repo: str) -> str:
 
 
 def timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
 
 
 def select_model(

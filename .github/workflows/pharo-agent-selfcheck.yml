@@ -1,0 +1,95 @@
+name: Runner Self-Check
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Also score whether the model can do Pharo work (slow)
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      bench_model:
+        description: Model to benchmark (blank uses the medium tier)
+        required: false
+        default: ""
+        type: string
+      no_tools:
+        description: Benchmark the raw model with no image, to measure what grounding is worth
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  selfcheck:
+    name: can this runner do the work
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 30
+    concurrency:
+      group: pharo-agent-selfcheck-${{ github.repository }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the runner is wired up
+        run: |
+          ./scripts/ai-ci-controller selfcheck --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_SMALL: ${{ vars.PHARO_AGENT_MODEL_SMALL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM }}
+          MODEL_LARGE: ${{ vars.PHARO_AGENT_MODEL_LARGE }}
+          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          PHARO_BASELINE: ${{ vars.PHARO_BASELINE }}
+          AI_CI_REQUIRE_PHARO: ${{ vars.PHARO_AGENT_REQUIRE_PHARO || 'false' }}
+
+  benchmark:
+    name: can the model do Pharo
+    needs: selfcheck
+    if: github.event_name == 'schedule' || inputs.benchmark == 'true'
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 90
+    concurrency:
+      group: pharo-agent-benchmark-${{ github.repository }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Score the model against the Pharo task set
+        run: |
+          ./scripts/ai-ci-controller bench \
+            --repo "$GITHUB_REPOSITORY" \
+            --report "$GITHUB_WORKSPACE/bench-report.md"
+        env:
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM }}
+          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          AI_CI_BENCH_MODEL: ${{ inputs.bench_model }}
+          AI_CI_BENCH_NO_TOOLS: ${{ inputs.no_tools || 'false' }}
+          AI_CI_BENCH_TIMEOUT: ${{ vars.PHARO_AGENT_BENCH_TIMEOUT || '120' }}
+
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharo-agent-bench-${{ github.run_id }}
+          path: ${{ github.workspace }}/bench-report.md
+          if-no-files-found: ignore
+          retention-days: 90

@@ -4,7 +4,6 @@ import unittest
 
 from ai_ci_controller.model_router import ModelPolicy, classify_model
 
-
 POLICY = ModelPolicy(
     default_model="fallback-coder",
     small_model="small-coder",

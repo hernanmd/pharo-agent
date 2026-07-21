@@ -197,6 +197,68 @@ Each issue gets its own branch, its own validation gate, and its own draft PR li
 
 The `Pharo Agent Issue Sweep` workflow runs weekly and **defaults to dry run**. Set the repository variable `PHARO_AGENT_SWEEP_DRY_RUN=false` when you are ready for it to actually open PRs.
 
+## Testing The Agent Itself
+
+Three layers, answering three different questions.
+
+### 1. Unit CI — "did I break the controller?"
+
+`.github/workflows/ci.yml` runs on GitHub-hosted runners on every push and PR. No Ollama, no Pharo, no self-hosted runner needed — the whole suite is hermetic, every fixture binds `127.0.0.1`.
+
+- pytest on Python 3.11, 3.12, and 3.13
+- `ruff check` (config in `pyproject.toml`)
+- package build, then every subcommand's `--help` is invoked to catch a broken entry point
+- workflow sanity: every job has a `timeout-minutes`, benchmark tasks and the example skill still load
+
+That last job also enforces an invariant that is easy to break silently: **a workflow running a quota-consuming command must be named so the daily quota counts it, and a workflow that does not must not be.** Get that backwards and either the daily limit stops limiting, or the nightly diagnostics quietly eat your PR budget.
+
+### 2. Runner self-check — "can this machine do the work?"
+
+```bash
+./scripts/ai-ci-controller selfcheck
+```
+
+Checks `git`, `gh`, `aider`, `gh` authentication, that Ollama answers and the configured models are actually pulled, and — the part that matters most — that the Pharo image really boots, the MCP server answers, `pharo_eval` returns `7` for `3 + 4`, and the class library is loaded.
+
+Exits non-zero when a required check fails, so it works as a gate before enabling the agent on a new runner. Pharo is a warning by default; set `PHARO_AGENT_REQUIRE_PHARO=true` to make an unbootable image fail the job.
+
+It runs from the repository root, so if that repository has a `.ai/pharo-load.st` the check exercises your real project load path, not just a bare image.
+
+### 3. Capability benchmark — "can the model do Pharo?"
+
+```bash
+./scripts/ai-ci-controller bench --bench-model <model>
+```
+
+Ten seeded tasks in `benchmarks/tasks/*.md`, scored objectively:
+
+| Kind | Measures | How it is scored |
+| --- | --- | --- |
+| `tonel` | can it write Pharo that actually loads | output is run through the same Tonel parser that gates real PRs |
+| `selector` | does it invent methods that do not exist | the model's yes/no is adjudicated by the live image |
+| `review` | does it find a seeded bug | must flag the right file and mention the right concept |
+
+The `selector` tasks are the interesting ones. Ground truth is not hardcoded — it is an expression evaluated in the image at run time, so the benchmark stays correct across Pharo versions. Four of them probe both directions: real-but-obscure selectors the model may wrongly deny, and plausible-sounding inventions it may wrongly confirm.
+
+Run it twice to measure what the image is worth:
+
+```bash
+./scripts/ai-ci-controller bench --bench-model <model>              # grounded
+./scripts/ai-ci-controller bench --bench-model <model> --no-tools   # raw
+```
+
+The gap between those two numbers is the value the live image adds for your model. That is the number worth tracking.
+
+**It never gates.** Local model output varies between runs, so a threshold would produce flaky red builds and train you to ignore CI. The scorecard goes to the job summary and a 90-day artifact; you read the trend.
+
+Harness errors — a timeout, an unreachable image, a malformed task — are reported separately from low scores, because they say nothing about the model. Use `--bench-timeout` (default 120s) so one rambling model cannot hold the whole run.
+
+Adding a task is a markdown file with frontmatter; no code changes.
+
+### Choosing a model to benchmark
+
+Benchmark an **instruction-tuned** model. Completion-tuned models — including Pharo-specific SFT checkpoints aimed at autocomplete — score near zero on these tasks, because the tasks are instructions, not continuations. That result measures the mismatch, not the model's Pharo knowledge.
+
 ## Organization Setup
 
 1. Go to `Organization Settings -> Actions -> Runner groups`.
