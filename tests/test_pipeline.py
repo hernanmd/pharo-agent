@@ -15,7 +15,6 @@ from ai_ci_controller.cli import (
 )
 from ai_ci_controller.skills import SkillSelection, load_skills, select_skills
 
-
 VALID_CLASS = """\
 Class {
 	#name : 'Demo',

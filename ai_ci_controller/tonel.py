@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 TONEL_SUFFIXES = (".class.st", ".trait.st", ".extension.st")
 HEADER_KINDS = ("Class", "Extension", "Trait", "Package")
 

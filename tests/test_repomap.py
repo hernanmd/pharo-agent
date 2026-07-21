@@ -2,7 +2,6 @@ from pathlib import Path
 
 from ai_ci_controller.repomap import build_repo_map
 
-
 CLASS_SOURCE = """\
 Class {
 	#name : 'Demo',

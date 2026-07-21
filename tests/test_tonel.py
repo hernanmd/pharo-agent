@@ -2,7 +2,6 @@ from pathlib import Path
 
 from ai_ci_controller.tonel import parse_tonel, validate_paths
 
-
 VALID_CLASS = """\
 "
 A demo class.

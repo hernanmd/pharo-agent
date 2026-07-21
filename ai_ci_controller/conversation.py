@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .command import run
 
-
 AI_MARKER = "<!-- ai-ci-controller -->"
 AI_BRANCH_RE = re.compile(r"^ai/(issue|fix-pr)-\d+-")
 

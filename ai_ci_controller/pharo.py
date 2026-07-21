@@ -11,7 +11,6 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_LOAD_SCRIPT = ".ai/pharo-load.st"
 DEFAULT_BOOT_TIMEOUT = 240
 DEFAULT_CALL_TIMEOUT = 120

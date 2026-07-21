@@ -9,7 +9,6 @@ from .command import CommandResult, run, run_shell
 from .rag import extract_changed_files
 from .tonel import validate_paths
 
-
 MAX_FALLBACK_SCAN_FILES = 400
 
 

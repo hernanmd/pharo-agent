@@ -7,7 +7,6 @@ from pathlib import Path
 from .rag import read_text
 from .tonel import TonelFile, parse_tonel
 
-
 IGNORED_DIRS = {
     ".git",
     ".hg",

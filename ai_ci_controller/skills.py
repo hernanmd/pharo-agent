@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 SKILLS_DIRNAME = ".ai/skills"
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<frontmatter>.*?)\n---\s*\n(?P<body>.*)\Z", re.DOTALL)
 LIST_KEYS = {"when", "tools", "validate"}
@@ -125,11 +124,7 @@ def parse_skill(text: str, *, path: str, fallback_name: str) -> Skill | None:
     )
 
 
-<<<<<<< HEAD
-def parse_frontmatter(text: str) -> dict[str, object]:
-=======
 def parse_frontmatter(text: str, *, list_keys: set[str] = LIST_KEYS) -> dict[str, object]:
->>>>>>> 03175f2 (second version)
     fields: dict[str, object] = {}
     current_list_key: str | None = None
 
@@ -152,11 +147,6 @@ def parse_frontmatter(text: str, *, list_keys: set[str] = LIST_KEYS) -> dict[str
         value = key_value.group("value").strip()
         current_list_key = None
 
-        if not value and key in LIST_KEYS:
-            fields[key] = []
-            current_list_key = key
-            continue
-        if key in LIST_KEYS:
         if not value and key in list_keys:
             fields[key] = []
             current_list_key = key
@@ -175,7 +165,6 @@ def parse_frontmatter(text: str, *, list_keys: set[str] = LIST_KEYS) -> dict[str
             continue
         fields[key] = scalar(value)
 
-    for key in LIST_KEYS:
     for key in list_keys:
         fields.setdefault(key, [])
     return fields

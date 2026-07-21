@@ -2,7 +2,6 @@ from pathlib import Path
 
 from ai_ci_controller.skills import load_skills, path_matches, render_skills, select_skills
 
-
 PHARO_SKILL = """\
 ---
 name: pharo

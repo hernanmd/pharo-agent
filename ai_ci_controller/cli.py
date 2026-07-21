@@ -7,12 +7,6 @@ import re
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-
-from .agent import build_tools, run_agent
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,7 +60,6 @@ from .validation import (
     run_tonel_check,
     run_validation,
 )
-
 
 DEFAULT_WORK_ROOT = Path.home() / ".cache" / "pharo-agent-ci-controller"
 AGENT_ARTIFACT_PATTERNS = [".aider*", ".ai-ci-*"]
@@ -1092,9 +1085,6 @@ def render_response_summary(
     )
     if amend.get("pushed"):
         lines.append(f"The agreed changes are pushed to this branch as `{amend['sha']}`.")
-    elif amend.get("attempted"):
-        lines.append(f"No commit was pushed: {amend['detail']}.")
-    elif counts["agree"]:
     elif amend.get("attempted") or counts["agree"]:
         lines.append(f"No commit was pushed: {amend['detail']}.")
 
