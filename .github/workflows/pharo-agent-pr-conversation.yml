@@ -1,0 +1,135 @@
+name: Pharo Agent PR Conversation
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to respond on
+        required: true
+        type: string
+      any_pr:
+        description: Respond even if the PR was not opened by the AI
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      dry_run:
+        description: Print the responses without posting them
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  actions: read
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  respond:
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 240
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request_review' &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association) &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'pull_request_review_comment' &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          contains(github.event.comment.body, '/ai reply') &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      )
+    env:
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
+    concurrency:
+      group: pharo-agent-pr-conversation-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Settle a burst of inline comments
+        if: github.event_name == 'pull_request_review_comment'
+        run: sleep 45
+
+      - name: Check local runner dependencies
+        run: |
+          command -v git
+          command -v gh
+          command -v aider
+          python --version
+          curl -fsS "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}/api/tags" >/dev/null
+
+      - name: Respond to review feedback
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_review|pull_request_review_comment)
+              PR_NUMBER="$PULL_REQUEST_NUMBER"
+              ;;
+            issue_comment)
+              PR_NUMBER="$ISSUE_NUMBER"
+              ;;
+            workflow_dispatch)
+              PR_NUMBER="$DISPATCH_PR_NUMBER"
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "Could not determine pull request number." >&2
+            exit 1
+          fi
+
+          ./scripts/ai-ci-controller respond-review \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_SMALL: ${{ vars.PHARO_AGENT_MODEL_SMALL || vars.PHARO_AGENT_MODEL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_LARGE: ${{ vars.PHARO_AGENT_MODEL_LARGE || vars.PHARO_AGENT_MODEL }}
+          LINT_CMD: ${{ vars.PHARO_AGENT_LINT_CMD }}
+          TEST_CMD: ${{ vars.PHARO_AGENT_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.PHARO_AGENT_DAILY_LIMIT || '10' }}
+          AI_CI_AGENT_MAX_ITERATIONS: ${{ vars.PHARO_AGENT_MAX_ITERATIONS || '12' }}
+          AI_CI_RESPOND_ANY_PR: ${{ inputs.any_pr || vars.PHARO_AGENT_RESPOND_ANY_PR || 'false' }}
+          AI_CI_RESPOND_NO_AMEND: ${{ vars.PHARO_AGENT_RESPOND_NO_AMEND || 'false' }}
+          AI_CI_EXTRA_CONTEXT: ${{ github.event.comment.body || github.event.review.body || '' }}
+          WORK_ROOT: ${{ github.workspace }}/.ai-ci-runs
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          PHARO_BASELINE: ${{ vars.PHARO_BASELINE }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
+          UNATTENDED: "1"

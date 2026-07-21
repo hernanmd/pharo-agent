@@ -1,4 +1,4 @@
-"""Local AI CI controller package."""
+"""Pharo Agent CI controller package."""
 
 __all__ = ["__version__"]
 

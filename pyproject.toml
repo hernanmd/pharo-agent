@@ -3,10 +3,10 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-ai-ci-controller"
+name = "pharo-agent-ci-controller"
 version = "0.1.0"
 description = "Self-hosted CI controller for Ollama-powered GitHub PR review and draft fix PRs."
-readme = "docs/local-ai-ci.md"
+readme = "docs/pharo-agent-ci.md"
 requires-python = ">=3.11"
 dependencies = []
 

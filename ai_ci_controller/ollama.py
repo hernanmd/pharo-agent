@@ -14,6 +14,19 @@ class OllamaClient:
     timeout_seconds: int = 600
 
     def chat(self, messages: list[dict[str, str]], *, json_format: bool = False) -> str:
+        message = self.chat_message(messages, json_format=json_format)
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError(f"Ollama returned an unexpected message: {message!r}")
+        return content
+
+    def chat_message(
+        self,
+        messages: list[dict],
+        *,
+        json_format: bool = False,
+        tools: list[dict] | None = None,
+    ) -> dict:
         payload: dict[str, object] = {
             "model": self.model,
             "messages": messages,
@@ -24,6 +37,8 @@ class OllamaClient:
         }
         if json_format:
             payload["format"] = "json"
+        if tools:
+            payload["tools"] = tools
 
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -41,11 +56,10 @@ class OllamaClient:
                 "Start Ollama on the CI machine and set OLLAMA_BASE_URL if needed."
             ) from exc
 
-        message = response_payload.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, str):
+        message = response_payload.get("message")
+        if not isinstance(message, dict):
             raise RuntimeError(f"Ollama returned an unexpected response: {response_payload!r}")
-        return content
+        return message
 
     def _url(self, path: str) -> str:
         return f"{self.base_url.rstrip('/')}{path}"

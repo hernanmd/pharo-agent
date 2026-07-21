@@ -7,6 +7,10 @@ import shutil
 
 from .command import CommandResult, run, run_shell
 from .rag import extract_changed_files
+from .tonel import validate_paths
+
+
+MAX_FALLBACK_SCAN_FILES = 400
 
 
 @dataclass(frozen=True)
@@ -52,9 +56,9 @@ def detect_syntax_commands(repo_dir: Path, *, diff_text: str) -> list[str]:
     if not files:
         files = [
             path
-            for path in repo_dir.rglob("*")
+            for path in sorted(repo_dir.rglob("*"))
             if path.is_file() and ".git" not in path.parts
-        ]
+        ][:MAX_FALLBACK_SCAN_FILES]
 
     commands: list[str] = []
     python_files = existing_relative_files(repo_dir, files, {".py"})
@@ -77,6 +81,29 @@ def detect_syntax_commands(repo_dir: Path, *, diff_text: str) -> list[str]:
         commands.extend(f"node --check {shlex.quote(path)}" for path in js_files[:20])
 
     return commands
+
+
+def run_tonel_check(repo_dir: Path, *, diff_text: str) -> ValidationResult | None:
+    changed = [path for path in extract_changed_files(diff_text) if path.lower().endswith(".st")]
+    if not changed:
+        return None
+
+    problems = validate_paths(repo_dir, changed)
+    checked = ", ".join(changed[:10])
+    if len(changed) > 10:
+        checked += f", (+{len(changed) - 10} more)"
+
+    if problems:
+        output = "\n".join(problems)
+    else:
+        output = f"{len(changed)} Tonel file(s) parsed cleanly: {checked}"
+
+    return ValidationResult(
+        name="tonel syntax check",
+        command="tonel syntax check",
+        passed=not problems,
+        output=output,
+    )
 
 
 def run_diff_check(repo_dir: Path) -> ValidationResult:

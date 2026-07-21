@@ -9,7 +9,18 @@ from .rag import extract_changed_files
 
 
 DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
-TEST_HINTS = {"/test/", "/tests/", "test_", "_test.", ".spec.", ".test."}
+TEST_HINTS = {
+    "/test/",
+    "/tests/",
+    "test_",
+    "_test.",
+    ".spec.",
+    ".test.",
+    "-test/",
+    "-tests/",
+    "test.class.st",
+    "tests.class.st",
+}
 LOCKFILE_NAMES = {
     "package-lock.json",
     "pnpm-lock.yaml",
@@ -22,6 +33,8 @@ LOCKFILE_NAMES = {
 }
 HIGH_RISK_PATH_PATTERNS = [
     re.compile(r"(^|/)\.github/workflows/"),
+    re.compile(r"(^|/)BaselineOf[A-Za-z0-9_]*(/|\.class\.st$)"),
+    re.compile(r"(^|/)package\.st$"),
     re.compile(r"(^|/)migrations?/"),
     re.compile(r"(^|/)schema\.(sql|rb|prisma|json)$"),
     re.compile(r"(^|/)(auth|oauth|security|crypto|permission|billing|payment)s?(/|$)", re.IGNORECASE),
@@ -192,6 +205,9 @@ def score_change(stats: DiffStats, *, title: str, body: str, mode: str) -> tuple
     if mode == "fix":
         score += 2
         reasons.append("fix mode can modify code")
+    elif mode == "respond":
+        score += 3
+        reasons.append("responding to review feedback needs judgement and can modify code")
     elif mode == "issue":
         score += 2
         reasons.append("issue implementation has no PR diff")

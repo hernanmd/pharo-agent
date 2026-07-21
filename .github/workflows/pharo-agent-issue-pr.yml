@@ -1,4 +1,4 @@
-name: Local AI Issue PR
+name: Pharo Agent Issue PR
 
 on:
   workflow_dispatch:
@@ -24,11 +24,12 @@ permissions:
 
 jobs:
   implement:
-    runs-on: [self-hosted, local-ai]
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 240
     env:
       OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
     concurrency:
-      group: local-ai-issue-pr-${{ github.repository }}-${{ inputs.issue }}
+      group: pharo-agent-issue-pr-${{ github.repository }}-${{ inputs.issue }}
       cancel-in-progress: false
 
     steps:
@@ -49,12 +50,18 @@ jobs:
         run: ./scripts/ai-ci-controller issue-pr --repo "$GITHUB_REPOSITORY" --issue "${{ inputs.issue }}"
         env:
           GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
-          MODEL_SMALL: ${{ vars.LOCAL_AI_MODEL_SMALL || vars.LOCAL_AI_MODEL }}
-          MODEL_MEDIUM: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
-          MODEL_LARGE: ${{ vars.LOCAL_AI_MODEL_LARGE || vars.LOCAL_AI_MODEL }}
-          LINT_CMD: ${{ vars.LOCAL_AI_LINT_CMD }}
-          TEST_CMD: ${{ vars.LOCAL_AI_TEST_CMD }}
-          AI_CI_DAILY_LIMIT: ${{ vars.LOCAL_AI_DAILY_LIMIT || '10' }}
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_SMALL: ${{ vars.PHARO_AGENT_MODEL_SMALL || vars.PHARO_AGENT_MODEL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_LARGE: ${{ vars.PHARO_AGENT_MODEL_LARGE || vars.PHARO_AGENT_MODEL }}
+          LINT_CMD: ${{ vars.PHARO_AGENT_LINT_CMD }}
+          TEST_CMD: ${{ vars.PHARO_AGENT_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.PHARO_AGENT_DAILY_LIMIT || '10' }}
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          PHARO_BASELINE: ${{ vars.PHARO_BASELINE }}
+          AI_CI_AGENT_MAX_ITERATIONS: ${{ vars.PHARO_AGENT_MAX_ITERATIONS || '12' }}
+          WORK_ROOT: ${{ github.workspace }}/.ai-ci-runs
+
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
           UNATTENDED: "1"

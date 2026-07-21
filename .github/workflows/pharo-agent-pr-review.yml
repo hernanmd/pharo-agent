@@ -1,10 +1,8 @@
-name: Local AI PR Review
+name: Pharo Agent PR Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -30,7 +28,8 @@ permissions:
 
 jobs:
   review:
-    runs-on: [self-hosted, local-ai]
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 90
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
@@ -38,15 +37,7 @@ jobs:
         github.event.pull_request.draft == false &&
         (
           github.event.pull_request.head.repo.full_name == github.repository ||
-          vars.LOCAL_AI_ALLOW_FORKS == 'true'
-        )
-      ) ||
-      (
-        github.event_name == 'pull_request_review' &&
-        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association) &&
-        (
-          github.event.pull_request.head.repo.full_name == github.repository ||
-          vars.LOCAL_AI_ALLOW_FORKS == 'true'
+          vars.PHARO_AGENT_ALLOW_FORKS == 'true'
         )
       ) ||
       (
@@ -58,8 +49,8 @@ jobs:
     env:
       OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
     concurrency:
-      group: local-ai-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
-      cancel-in-progress: false
+      group: pharo-agent-pr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
 
     steps:
       - name: Check out controller
@@ -100,16 +91,22 @@ jobs:
           ./scripts/ai-ci-controller review-pr --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER"
         env:
           GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
-          MODEL_SMALL: ${{ vars.LOCAL_AI_MODEL_SMALL || vars.LOCAL_AI_MODEL }}
-          MODEL_MEDIUM: ${{ vars.LOCAL_AI_MODEL_MEDIUM || vars.LOCAL_AI_MODEL }}
-          MODEL_LARGE: ${{ vars.LOCAL_AI_MODEL_LARGE || vars.LOCAL_AI_MODEL }}
-          LINT_CMD: ${{ vars.LOCAL_AI_LINT_CMD }}
-          TEST_CMD: ${{ vars.LOCAL_AI_TEST_CMD }}
-          AI_CI_DAILY_LIMIT: ${{ vars.LOCAL_AI_DAILY_LIMIT || '10' }}
-          LOCAL_AI_ALLOW_FORKS: ${{ vars.LOCAL_AI_ALLOW_FORKS || 'false' }}
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_SMALL: ${{ vars.PHARO_AGENT_MODEL_SMALL || vars.PHARO_AGENT_MODEL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_LARGE: ${{ vars.PHARO_AGENT_MODEL_LARGE || vars.PHARO_AGENT_MODEL }}
+          LINT_CMD: ${{ vars.PHARO_AGENT_LINT_CMD }}
+          TEST_CMD: ${{ vars.PHARO_AGENT_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.PHARO_AGENT_DAILY_LIMIT || '10' }}
+          PHARO_AGENT_ALLOW_FORKS: ${{ vars.PHARO_AGENT_ALLOW_FORKS || 'false' }}
           AI_CI_EXTRA_CONTEXT: ${{ github.event.comment.body || github.event.review.body || '' }}
           DISPATCH_PR_NUMBER: ${{ inputs.pr }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          PHARO_BASELINE: ${{ vars.PHARO_BASELINE }}
+          AI_CI_AGENT_MAX_ITERATIONS: ${{ vars.PHARO_AGENT_MAX_ITERATIONS || '12' }}
+          WORK_ROOT: ${{ github.workspace }}/.ai-ci-runs
+
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}

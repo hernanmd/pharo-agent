@@ -1,0 +1,93 @@
+name: Pharo Agent Issue Sweep
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: How many recent open issues to process
+        required: false
+        default: "5"
+        type: string
+      labels:
+        description: Comma-separated labels to filter on (blank means all)
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Commit locally but do not push or open draft PRs
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  actions: read
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  sweep:
+    runs-on: [self-hosted, pharo-agent]
+    timeout-minutes: 360
+    env:
+      OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434' }}
+    concurrency:
+      group: pharo-agent-issue-sweep-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check local runner dependencies
+        run: |
+          command -v git
+          command -v gh
+          command -v aider
+          python --version
+          curl -fsS "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}/api/tags" >/dev/null
+          if [[ -n "${PHARO_VM:-}" ]]; then
+            "$PHARO_VM" --version || echo "warning: PHARO_VM is set but not runnable"
+          fi
+        env:
+          PHARO_VM: ${{ vars.PHARO_VM }}
+
+      - name: Sweep recent issues into draft pull requests
+        run: |
+          ./scripts/ai-ci-controller sweep-issues \
+            --repo "$GITHUB_REPOSITORY" \
+            --limit "${SWEEP_LIMIT:-5}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_SMALL: ${{ vars.PHARO_AGENT_MODEL_SMALL || vars.PHARO_AGENT_MODEL }}
+          MODEL_MEDIUM: ${{ vars.PHARO_AGENT_MODEL_MEDIUM || vars.PHARO_AGENT_MODEL }}
+          MODEL_LARGE: ${{ vars.PHARO_AGENT_MODEL_LARGE || vars.PHARO_AGENT_MODEL }}
+          LINT_CMD: ${{ vars.PHARO_AGENT_LINT_CMD }}
+          TEST_CMD: ${{ vars.PHARO_AGENT_TEST_CMD }}
+          AI_CI_DAILY_LIMIT: ${{ vars.PHARO_AGENT_DAILY_LIMIT || '10' }}
+          AI_CI_ISSUE_LABELS: ${{ inputs.labels || vars.PHARO_AGENT_ISSUE_LABELS || '' }}
+          AI_CI_AGENT_MAX_ITERATIONS: ${{ vars.PHARO_AGENT_MAX_ITERATIONS || '12' }}
+          SWEEP_LIMIT: ${{ inputs.limit || vars.PHARO_AGENT_ISSUE_LIMIT || '5' }}
+          WORK_ROOT: ${{ github.workspace }}/.ai-ci-runs
+          PHARO_VM: ${{ vars.PHARO_VM }}
+          PHARO_IMAGE: ${{ vars.PHARO_IMAGE }}
+          PHARO_BASELINE: ${{ vars.PHARO_BASELINE }}
+          DRY_RUN: ${{ (inputs.dry_run || vars.PHARO_AGENT_SWEEP_DRY_RUN || 'true') == 'false' && '0' || '1' }}
+          UNATTENDED: "1"
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharo-agent-issue-sweep-${{ github.run_id }}
+          path: ${{ github.workspace }}/.ai-ci-runs/*/artifacts
+          if-no-files-found: ignore
+          retention-days: 14

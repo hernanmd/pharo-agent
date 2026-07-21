@@ -198,13 +198,15 @@ def tokenize(text: str) -> set[str]:
 
 def read_text(path: Path, *, limit: int | None = None) -> str:
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            data = handle.read(limit) if limit is not None else handle.read()
+            truncated = limit is not None and len(data) == limit and bool(handle.read(1))
     except OSError:
         return ""
     if b"\0" in data[:4096]:
         return ""
-    if limit is not None:
-        data = data[:limit]
+    if truncated:
+        return data.decode("utf-8", errors="ignore")
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
