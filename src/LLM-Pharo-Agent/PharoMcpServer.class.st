@@ -7,7 +7,9 @@ Class {
 		'port'
 	],
 	#classVars : [
-		'DefaultInstance'
+		'DefaultInstance',
+		'MaxResultBytesDefault',
+		'ReadOnlyMode'
 	],
 	#category : 'LLM-Pharo-Agent-Core',
 	#package : 'LLM-Pharo-Agent',
@@ -26,6 +28,27 @@ PharoMcpServer class >> defaultPort [
 	^ 4046
 ]
 
+{ #category : 'gating' }
+PharoMcpServer class >> destructiveToolNames [
+	"Tool names that mutate the image or the repository. In read-only mode these are
+	 refused without executing, matching the ask-first tiers in AGENTS.md."
+	^ #( pharo_compile_method pharo_remove_method pharo_create_class pharo_move_class_to_package_tag
+		  pharo_ice_commit pharo_ice_push pharo_ice_pull pharo_ice_discard_changes
+		  pharo_ice_checkout_branch pharo_ice_switch_branch pharo_ice_create_branch pharo_ice_checkout
+		  pharo_ice_notify_package_modified )
+]
+
+{ #category : 'configuration' }
+PharoMcpServer class >> maxResultBytesDefault [
+	"Default byte budget for tool result truncation. nil means no limit."
+	^ MaxResultBytesDefault ifNil: [ 12288 ]
+]
+
+{ #category : 'configuration' }
+PharoMcpServer class >> maxResultBytesDefault: anInteger [
+	MaxResultBytesDefault := anInteger
+]
+
 { #category : 'accessing' }
 PharoMcpServer class >> portFromEnvironment [
 
@@ -34,6 +57,16 @@ PharoMcpServer class >> portFromEnvironment [
 		         at: 'PHARO_MCP_PORT'
 		         ifAbsent: [ self defaultPort printString ].
 	^ value asNumber
+]
+
+{ #category : 'configuration' }
+PharoMcpServer class >> readOnlyMode [
+	^ ReadOnlyMode ifNil: [ false ]
+]
+
+{ #category : 'configuration' }
+PharoMcpServer class >> readOnlyMode: aBoolean [
+	ReadOnlyMode := aBoolean
 ]
 
 { #category : 'accessing' }
@@ -103,6 +136,22 @@ PharoMcpServer >> allSlotsOf: aClassName [
 		  (class allSlots collect: [ :s | s printString ])
 ]
 
+{ #category : 'gating' }
+PharoMcpServer >> applyReadOnlyGateOn: aServer [
+	"Wrap every destructive tool handler with a live check of the read-only flag.
+	 The wrapper re-reads readOnlyMode on each call so the gate can be toggled at
+	 runtime. When the flag is false the original handler runs unchanged."
+
+	self class destructiveToolNames do: [ :name | | tool original |
+		tool := aServer toolNamed: name.
+		tool ifNotNil: [
+			original := tool handler.
+			tool handler: [ :args |
+				self class readOnlyMode
+					ifTrue: [ McpToolResult errorText: 'Read-only mode is enabled: ' , name , ' is destructive and was not executed' ]
+					ifFalse: [ original value: args ] ] ] ]
+]
+
 { #category : 'private' }
 PharoMcpServer >> behaviorNamed: aName classSide: aBoolean [
 
@@ -123,16 +172,21 @@ PharoMcpServer >> booleanAsText: aBoolean [
 		  ifFalse: [ 'false' ]
 ]
 
-{ #category : 'private' }
+{ #category : 'parsing' }
 PharoMcpServer >> booleanFrom: anObject default: aBoolean [
+	"Coerce anObject to a Boolean.
+	 Accepts real booleans and the strings true/yes/1 and false/no/0.
+	 Also accepts the 'side' enum used by pharo_compile_method and
+	 pharo_protocol_names: 'class' / 'classside' -> true, 'instance' /
+	 'instanceside' -> false. Anything else falls back to aBoolean."
 
 	anObject ifNil: [ ^ aBoolean ].
 	anObject class = Boolean ifTrue: [ ^ anObject ].
 	(anObject isString or: [ anObject respondsTo: #asString ]) ifTrue: [
 		| value |
 		value := anObject asString trimBoth asLowercase.
-		(#( 'true' 'yes' '1' ) includes: value) ifTrue: [ ^ true ].
-		(#( 'false' 'no' '0' ) includes: value) ifTrue: [ ^ false ] ].
+		(#( 'true' 'yes' '1' 'class' 'classside' ) includes: value) ifTrue: [ ^ true ].
+		(#( 'false' 'no' '0' 'instance' 'instanceside' ) includes: value) ifTrue: [ ^ false ] ].
 	^ aBoolean
 ]
 
@@ -695,6 +749,28 @@ PharoMcpServer >> protocolNamesOf: aClassName side: sideString [
 	^ self stringsAsLines: behavior protocolNames asSortedCollection
 ]
 
+{ #category : 'tools' }
+PharoMcpServer >> registerDiscoveryToolsOn: aServer [
+	"Two discovery meta-tools so an agent can search the catalog and fetch a single
+	 tool schema on demand, instead of relying only on the full tools/list payload."
+
+	aServer addTool: (McpTool
+			 name: 'pharo_tool_search'
+			 description: 'Search the registered Pharo MCP tools by keyword (matches tool name or description). Returns one line per match as name - description. Use pharo_tool_get to fetch the full input schema of a specific tool.'
+			 inputSchema: (McpSchema
+				  object: { ('query' -> (McpSchema string: 'Substring to match against tool name or description, case-insensitive')) }
+				  required: #( 'query' ))
+			 handler: [ :args | McpToolResult successText: (self searchToolDescriptionsFor: (args at: 'query')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_tool_get'
+			 description: 'Return the full input schema of one registered tool as JSON text, so an agent can refresh a single tool contract without reloading the whole tools/list.'
+			 inputSchema: (McpSchema
+				  object: { ('name' -> (McpSchema string: 'Registered tool name, e.g. pharo_compile_method')) }
+				  required: #( 'name' ))
+			 handler: [ :args | McpToolResult successText: (self toolSchemaTextFor: (args at: 'name')) ])
+]
+
 { #category : 'tool registration' }
 PharoMcpServer >> registerIcebergTools2On: aServer [
 
@@ -1194,6 +1270,29 @@ PharoMcpServer >> registerNewToolsOn: aServer [
 	self registerIcebergTools3On: aServer
 ]
 
+{ #category : 'tools' }
+PharoMcpServer >> registerRemoveMethodSideToolOn: aServer [
+	"Replace the pharo_remove_method tool registered by registerToolsOn: with a
+	 side-aware version so class-side (metaclass) methods can be removed too."
+
+	aServer removeTool: 'pharo_remove_method'.
+	aServer addTool: (McpTool
+			 name: 'pharo_remove_method'
+			 description: 'Remove the named method from the given class. Set side to "class" to remove a class-side (metaclass) method. Returns "removed" on success, "not present" if the method was not present.'
+			 inputSchema: (McpSchema
+				  object: {
+						  ('className' -> McpSchema string).
+						  ('selector' -> McpSchema string).
+						  ('side' -> (McpSchema string: 'instance (default) or class')) }
+				  required: #( 'className' 'selector' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self
+					  removeMethod: (args at: 'selector')
+					  from: (args at: 'className')
+					  side: (args at: 'side' ifAbsent: [ 'instance' ])) ])
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> registerResourcesOn: aServer [
 
@@ -1535,16 +1634,24 @@ PharoMcpServer >> registerToolsOn: aServer [
 	self registerNewToolsOn: aServer
 ]
 
-{ #category : 'modification' }
+{ #category : 'tools' }
 PharoMcpServer >> removeMethod: aSelector from: aClassName [
-	"Remove the named method from the given class. Returns 'removed' on success, 'not present' if the selector was not present, or 'ERROR: ...' on failure."
+	"Backward-compatible instance-side removal. Delegates to the side-aware variant."
+	^ self removeMethod: aSelector from: aClassName side: 'instance'
+]
 
-	| class selector |
-	class := self classNamed: aClassName.
-	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
+{ #category : 'tools' }
+PharoMcpServer >> removeMethod: aSelector from: aClassName side: sideString [
+	"Remove the named method from the given class. sideString is 'instance' (default)
+	 or 'class' to remove a class-side (metaclass) method. Returns 'removed' on success,
+	 'not present' if the method was not present, or 'ERROR: ...' on failure."
+
+	| behavior selector |
+	behavior := self behaviorNamed: aClassName classSide: (self booleanFrom: sideString default: false).
+	behavior ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	selector := aSelector trimBoth asSymbol.
-	(class includesSelector: selector) ifFalse: [ ^ 'not present' ].
-	class removeSelector: selector.
+	(behavior includesSelector: selector) ifFalse: [ ^ 'not present' ].
+	behavior removeSelector: selector.
 	^ 'removed'
 ]
 
@@ -1620,6 +1727,19 @@ PharoMcpServer >> resourceTemplateDefinitions [
 			   yourself) }
 ]
 
+{ #category : 'tools' }
+PharoMcpServer >> searchToolDescriptionsFor: aQuery [
+	| lc lines |
+	lc := aQuery asString asLowercase.
+	lines := (self server tools values
+		select: [ :tool |
+			(tool name asString asLowercase includesSubstring: lc)
+				or: [ tool description ifNil: [ false ] ifNotNil: [ :d | d asString asLowercase includesSubstring: lc ] ] ]
+		thenCollect: [ :tool | tool name , ' - ' , (tool description ifNil: [ '' ]) ]) asArray.
+	lines ifEmpty: [ ^ 'No tools matched: ' , aQuery asString ].
+	^ String cr join: lines
+]
+
 { #category : 'reflection' }
 PharoMcpServer >> selectorsInProtocol: aProtocolName of: aClassName [
 	"Answer a textual list of every selector in the given protocol across the class hierarchy."
@@ -1646,11 +1766,9 @@ PharoMcpServer >> slotNamesOf: aClassName [
 	^ self stringsAsLines: class slotNames
 ]
 
-{ #category : 'starting' }
+{ #category : 'running' }
 PharoMcpServer >> start [
-
 	self isRunning ifTrue: [ ^ self ].
-
 	transport := McpHttpTransport new
 		             port: port;
 		             yourself.
@@ -1658,10 +1776,13 @@ PharoMcpServer >> start [
 		          name: MCPConstants mcpServerName
 		          version: MCPConstants mcpServerVersion.
 	server transport: transport.
+	server maxResultBytes: self class maxResultBytesDefault.
 	self registerToolsOn: server.
 	self registerResourcesOn: server.
+	self registerDiscoveryToolsOn: server.
+	self registerRemoveMethodSideToolOn: server.
+	self applyReadOnlyGateOn: server.
 	server start.
-
 	Transcript
 		show: '[PharoMcpServer] MCP server listening on http://localhost:';
 		show: port printString;
@@ -1849,6 +1970,14 @@ PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
 		  at: 'properties' put: properties;
 		  at: 'required' put: requiredKeys;
 		  yourself
+]
+
+{ #category : 'tools' }
+PharoMcpServer >> toolSchemaTextFor: aName [
+	| tool |
+	tool := self server toolNamed: aName asString.
+	tool ifNil: [ ^ 'Tool not found: ' , aName asString ].
+	^ (STONJSON toString: tool asDictionary)
 ]
 
 { #category : 'starting' }
