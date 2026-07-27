@@ -203,9 +203,7 @@ PharoMcpServer >> callToolNamed: toolName withArguments: args [
 					   compileMethodSource: (args at: 'sourceCode' ifAbsent: [ '' ])
 					   forClassNamed: (args at: 'className' ifAbsent: [ '' ])
 					   protocol: (args at: 'protocol' ifAbsent: [ 'as yet unclassified' ])
-					   classSide: (self
-							    booleanFrom: (args at: 'classSide' ifAbsent: [ false ])
-							    default: false))
+					   classSide: ((args at: 'side' ifAbsent: [ 'instance' ]) asString = 'class'))
 			  isError: false ].
 
 	^ self callToolResultText: 'Unknown tool: ' , toolName isError: true
