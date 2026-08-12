@@ -159,97 +159,6 @@ PharoMcpServer >> booleanFrom: anObject default: aBoolean [
 	^ aBoolean
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> callToolNamed: toolName withArguments: args [
-
-	toolName = 'pharo_eval' ifTrue: [
-		^ self callToolResultText:
-			  (self evaluateSource: (args at: 'code' ifAbsent: [ '' ]))
-			  isError: false ].
-
-	toolName = 'pharo_open_class_browser' ifTrue: [
-		| name class |
-		name := (args at: 'className' ifAbsent: [ '' ]) trimBoth.
-		class := self classNamed: name.
-		class ifNil: [
-			^ self callToolResultText: 'Class not found: ' , name isError: true ].
-		self deferToUi: [ Smalltalk tools browser openOnClass: class ].
-		^ self callToolResultText: 'Browser requested for class ' , name isError: false ].
-
-	toolName = 'pharo_open_method_browser' ifTrue: [
-		| ref parts class selector |
-		ref := (args at: 'reference' ifAbsent: [ '' ]) trimBoth.
-		parts := ref substrings: '>>'.
-		parts size = 2 ifFalse: [
-			^ self
-				  callToolResultText: 'Method reference must look like ClassName>>selector'
-				  isError: true ].
-		class := self classNamed: parts first.
-		class ifNil: [
-			^ self callToolResultText: 'Class not found: ' , parts first isError: true ].
-		selector := parts second trimBoth asSymbol.
-		(class includesSelector: selector) ifFalse: [
-			^ self callToolResultText: 'Selector not found: ' , ref isError: true ].
-		self deferToUi: [ Smalltalk tools browser openOnClass: class selector: selector ].
-		^ self callToolResultText: 'Browser requested for method ' , ref isError: false ].
-
-	toolName = 'pharo_class_source' ifTrue: [
-		^ self
-			  callToolResultText:
-				  (self classSourceFor: (args at: 'className' ifAbsent: [ '' ]))
-			  isError: false ].
-
-	toolName = 'pharo_method_source' ifTrue: [
-		^ self
-			  callToolResultText:
-				  (self
-					   methodSourceFor: (args at: 'className' ifAbsent: [ '' ])
-					   selector: (args at: 'selector' ifAbsent: [ '' ]))
-			  isError: false ].
-
-	toolName = 'pharo_create_class' ifTrue: [
-		^ self
-			  callToolResultText:
-				  (self
-					   createClassNamed: (args at: 'className' ifAbsent: [ '' ])
-					   superclassName: (args at: 'superclassName' ifAbsent: [ '' ])
-					   packageName: (args at: 'packageName' ifAbsent: [ '' ])
-					   tag: (args at: 'tag' ifAbsent: [ nil ])
-					   instanceVariables: (args at: 'instanceVariables' ifAbsent: [ nil ])
-					   classVariables: (args at: 'classVariables' ifAbsent: [ nil ]))
-			  isError: false ].
-
-	toolName = 'pharo_compile_method' ifTrue: [
-		^ self
-			  callToolResultText:
-				  (self
-					   compileMethodSource: (args at: 'sourceCode' ifAbsent: [ '' ])
-					   forClassNamed: (args at: 'className' ifAbsent: [ '' ])
-					   protocol: (args at: 'protocol' ifAbsent: [ 'as yet unclassified' ])
-					   classSide: (self
-							    booleanFrom: (args at: 'classSide' ifAbsent: [ false ])
-							    default: false))
-			  isError: false ].
-
-	^ self callToolResultText: 'Unknown tool: ' , toolName isError: true
-]
-
-{ #category : 'private' }
-PharoMcpServer >> callToolResultText: aString isError: aBoolean [
-
-	| result |
-	result := OrderedDictionary new
-		          at: 'content' put: {
-				          (OrderedDictionary new
-					           at: 'type' put: 'text';
-					           at: 'text' put: aString;
-					           yourself) };
-		          yourself.
-	(aBoolean or: [ aString beginsWith: 'ERROR:' ]) ifTrue: [
-		result at: 'isError' put: true ].
-	^ result
-]
-
 { #category : 'helpers - class comment' }
 PharoMcpServer >> classCommentOf: aClassName [
 	| class |
@@ -393,77 +302,6 @@ PharoMcpServer >> extensionSelectorsOf: aClassName [
 	^ self stringsAsLines: class extensionSelectors
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> handleHttpMcpBody: aBodyString [
-
-	| payload id method params |
-	payload := [ STONJSON fromString: aBodyString ]
-		           on: Error
-		           do: [ :ex |
-			           ^ self
-				             jsonRpcErrorResponseForId: nil
-				             code: -32700
-				             message: ex messageText ].
-	(payload isDictionary and: [ payload includesKey: 'method' ]) ifFalse: [
-		^ self
-			  jsonRpcErrorResponseForId: (payload at: 'id' ifAbsent: [ nil ])
-			  code: -32600
-			  message: 'Invalid JSON-RPC request' ].
-
-	id := payload at: 'id' ifAbsent: [ nil ].
-	method := payload at: 'method'.
-	params := payload at: 'params' ifAbsent: [ OrderedDictionary new ].
-	id ifNil: [
-		method = 'notifications/initialized' ifTrue: [ ^ nil ].
-		method = 'notifications/cancelled' ifTrue: [ ^ nil ] ].
-
-	method = 'initialize' ifTrue: [
-		^ self jsonRpcSuccessResponseForId: id result: (self initializeResultFor: params) ].
-	method = 'ping' ifTrue: [
-		^ self jsonRpcSuccessResponseForId: id result: OrderedDictionary new ].
-	method = 'tools/list' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (OrderedDictionary new
-					   at: 'tools' put: self toolDefinitions;
-					   yourself) ].
-	method = 'tools/call' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (self
-					   callToolNamed: (params at: 'name' ifAbsent: [ '' ])
-					   withArguments: (params at: 'arguments' ifAbsent: [ OrderedDictionary new ])) ].
-	method = 'resources/list' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (OrderedDictionary new
-					   at: 'resources' put: self resourceDefinitions;
-					   yourself) ].
-	method = 'resources/templates/list' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (OrderedDictionary new
-					   at: 'resourceTemplates' put: self resourceTemplateDefinitions;
-					   yourself) ].
-	method = 'resources/read' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (OrderedDictionary new
-					   at: 'contents' put: { (self resourceContentForUri: (params at: 'uri' ifAbsent: [ '' ])) };
-					   yourself) ].
-	method = 'prompts/list' ifTrue: [
-		^ self
-			  jsonRpcSuccessResponseForId: id
-			  result: (OrderedDictionary new
-					   at: 'prompts' put: #(  );
-					   yourself) ].
-
-	^ self
-		  jsonRpcErrorResponseForId: id
-		  code: -32601
-		  message: 'Method not found: ' , method
-]
-
 { #category : 'reflection' }
 PharoMcpServer >> hasInstVarNamed: aName in: aClassName [
 	"Answer true if the given class defines an instance variable with the given name."
@@ -505,33 +343,6 @@ PharoMcpServer >> initialize [
 	transport := nil
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> initializeResultFor: params [
-
-	| protocolVersion capabilities serverInfo result |
-	protocolVersion := params
-		                   at: 'protocolVersion'
-		                   ifAbsent: [ '2025-06-18' ].
-	capabilities := OrderedDictionary new
-		                at: 'tools' put: OrderedDictionary new;
-		                at: 'resources' put: OrderedDictionary new;
-		                at: 'prompts' put: OrderedDictionary new;
-		                yourself.
-	serverInfo := OrderedDictionary new
-		              at: 'name' put: 'pharo';
-		              at: 'version' put: '0.1.0';
-		              yourself.
-	result := OrderedDictionary new
-		          at: 'protocolVersion' put: protocolVersion;
-		          at: 'capabilities' put: capabilities;
-		          at: 'serverInfo' put: serverInfo;
-		          at: 'instructions'
-		          put:
-			          'Use the available tools to inspect and edit the connected live Pharo image.';
-		          yourself.
-	^ result
-]
-
 { #category : 'reflection' }
 PharoMcpServer >> instVarNamesOf: aClassName [
 	"Answer a textual list of the instance variable names defined locally on the class (not inherited)."
@@ -556,37 +367,6 @@ PharoMcpServer >> isMetaClass: aClassName [
 PharoMcpServer >> isRunning [
 
 	^ transport isNotNil and: [ transport isRunning ]
-]
-
-{ #category : 'private' }
-PharoMcpServer >> jsonRpcErrorResponseForId: anId code: aCode message: aMessage [
-
-	^ String streamContents: [ :s |
-		  (STONWriter new
-			   jsonMode: true;
-			   referencePolicy: #ignore;
-			   on: s) nextPut: (OrderedDictionary new
-				   at: 'jsonrpc' put: '2.0';
-				   at: 'id' put: anId;
-				   at: 'error' put: (OrderedDictionary new
-						    at: 'code' put: aCode;
-						    at: 'message' put: aMessage;
-						    yourself);
-				   yourself) ]
-]
-
-{ #category : 'private' }
-PharoMcpServer >> jsonRpcSuccessResponseForId: anId result: aResultObject [
-
-	^ String streamContents: [ :s |
-		  (STONWriter new
-			   jsonMode: true;
-			   referencePolicy: #ignore;
-			   on: s) nextPut: (OrderedDictionary new
-				   at: 'jsonrpc' put: '2.0';
-				   at: 'id' put: anId;
-				   at: 'result' put: aResultObject;
-				   yourself) ]
 ]
 
 { #category : 'reflection' }
@@ -1656,78 +1436,6 @@ PharoMcpServer >> removeMethod: aSelector from: aClassName [
 	^ 'removed'
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> resourceContentForUri: aUriString [
-
-	| text |
-	aUriString = 'pharo://system/info' ifTrue: [
-		text := self systemInfoString.
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	(aUriString beginsWith: 'pharo://class/') ifTrue: [
-		| className |
-		className := aUriString allButFirst: 'pharo://class/' size.
-		text := self classSourceFor: className.
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	(aUriString beginsWith: 'pharo://method/') ifTrue: [
-		| remainder separatorIndex className selector |
-		remainder := aUriString allButFirst: 'pharo://method/' size.
-		separatorIndex := remainder indexOf: $/.
-		separatorIndex = 0 ifTrue: [
-			text := 'ERROR: malformed method resource URI: ' , aUriString ]
-		ifFalse: [
-			className := remainder copyFrom: 1 to: separatorIndex - 1.
-			selector := remainder copyFrom: separatorIndex + 1 to: remainder size.
-			text := self methodSourceFor: className selector: selector ].
-		^ OrderedDictionary new
-			  at: 'uri' put: aUriString;
-			  at: 'mimeType' put: 'text/plain';
-			  at: 'text' put: text;
-			  yourself ].
-	^ OrderedDictionary new
-		  at: 'uri' put: aUriString;
-		  at: 'mimeType' put: 'text/plain';
-		  at: 'text' put: 'ERROR: unknown resource URI: ' , aUriString;
-		  yourself
-]
-
-{ #category : 'private' }
-PharoMcpServer >> resourceDefinitions [
-
-	^ {
-		  (OrderedDictionary new
-			   at: 'uri' put: 'pharo://system/info';
-			   at: 'name' put: 'Pharo System Info';
-			   at: 'description' put: 'Pharo version and image identity';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself) }
-]
-
-{ #category : 'private' }
-PharoMcpServer >> resourceTemplateDefinitions [
-
-	^ {
-		  (OrderedDictionary new
-			   at: 'uriTemplate' put: 'pharo://class/{className}';
-			   at: 'name' put: 'Class Source';
-			   at: 'description' put: 'Definition and method list of a class';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself).
-		  (OrderedDictionary new
-			   at: 'uriTemplate' put: 'pharo://method/{className}/{selector}';
-			   at: 'name' put: 'Method Source';
-			   at: 'description' put: 'Source code of a single method';
-			   at: 'mimeType' put: 'text/plain';
-			   yourself) }
-]
-
 { #category : 'reflection' }
 PharoMcpServer >> selectorsInProtocol: aProtocolName of: aClassName [
 	"Answer a textual list of every selector in the given protocol across the class hierarchy."
@@ -1786,23 +1494,6 @@ PharoMcpServer >> stop [
 	transport := nil
 ]
 
-{ #category : 'private' }
-PharoMcpServer >> stringSchema [
-
-	^ self stringSchema: nil
-]
-
-{ #category : 'private' }
-PharoMcpServer >> stringSchema: description [
-
-	| schema |
-	schema := OrderedDictionary new
-		          at: 'type' put: 'string';
-		          yourself.
-	description ifNotNil: [ schema at: 'description' put: description ].
-	^ schema
-]
-
 { #category : 'private - formatting' }
 PharoMcpServer >> stringsAsLines: aCollection [
 	"Answer a newline-joined list of strings, one per line."
@@ -1845,112 +1536,6 @@ PharoMcpServer >> systemInfoString [
 				  nextPutAll: 'Image: ';
 				  nextPutAll: Smalltalk image imagePath;
 				  cr ]
-]
-
-{ #category : 'private' }
-PharoMcpServer >> toolDefinitionNamed: name description: description schema: inputSchema [
-
-	^ OrderedDictionary new
-		  at: 'name' put: name;
-		  at: 'description' put: description;
-		  at: 'inputSchema' put: inputSchema;
-		  yourself
-]
-
-{ #category : 'private' }
-PharoMcpServer >> toolDefinitions [
-
-	^ {
-		  (self
-			   toolDefinitionNamed: 'pharo_eval'
-			   description: 'Evaluate a Smalltalk expression in the live Pharo image. Returns the printString of the result.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'code' put: (self stringSchema: 'Smalltalk source to evaluate');
-							     yourself)
-					    required: #( 'code' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_open_class_browser'
-			   description: 'Open a System Browser on the given class in the running image.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'className' put: (self stringSchema: 'Fully-qualified class name, e.g. String');
-							     yourself)
-					    required: #( 'className' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_open_method_browser'
-			   description: 'Open a System Browser on the given method. Reference format: ClassName>>selector.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'reference' put: (self stringSchema: 'Method reference like String>>asUppercase');
-							     yourself)
-					    required: #( 'reference' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_class_source'
-			   description: 'Return the class definition and the list of selectors for a class.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'className' put: self stringSchema;
-							     yourself)
-					    required: #( 'className' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_method_source'
-			   description: 'Return the source of a single method.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'className' put: self stringSchema;
-							     at: 'selector' put: self stringSchema;
-							     yourself)
-					    required: #( 'className' 'selector' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_create_class'
-			   description: 'Create a class in the running image for terminal-driven coding workflows.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'className' put: (self stringSchema: 'Name of the class to create');
-							     at: 'superclassName' put: (self stringSchema: 'Superclass name, for example Object');
-							     at: 'packageName' put: (self stringSchema: 'Target package name');
-							     at: 'instanceVariables' put: (self stringSchema: 'Optional instance variable names separated by spaces or commas');
-							     at: 'classVariables' put: (self stringSchema: 'Optional class variable names separated by spaces or commas');
-							     at: 'tag' put: (self stringSchema: 'Optional package tag');
-							     yourself)
-					    required: #( 'className' 'superclassName' 'packageName' ))).
-		  (self
-			   toolDefinitionNamed: 'pharo_compile_method'
-			   description: 'Compile a method on the instance side or class side of a class in the running image.'
-			   schema: (self
-					    toolSchemaForProperties:
-						    (OrderedDictionary new
-							     at: 'className' put: (self stringSchema: 'Target class name');
-							     at: 'sourceCode' put: (self stringSchema: 'Full Smalltalk method source code');
-							     at: 'protocol' put: (self stringSchema: 'Protocol/category name');
-							     at: 'classSide' put: (self stringSchema: 'Optional true/false string. true compiles on the class side');
-							     yourself)
-					    required: #( 'className' 'sourceCode' 'protocol' ))) }
-]
-
-{ #category : 'private' }
-PharoMcpServer >> toolResultForText: aString [
-
-	(aString beginsWith: 'ERROR:')
-		ifTrue: [ ^ McpToolResult errorText: (aString allButFirst: 'ERROR: ' size) ].
-	^ McpToolResult successText: aString
-]
-
-{ #category : 'private' }
-PharoMcpServer >> toolSchemaForProperties: properties required: requiredKeys [
-
-	^ OrderedDictionary new
-		  at: 'type' put: 'object';
-		  at: 'properties' put: properties;
-		  at: 'required' put: requiredKeys;
-		  yourself
 ]
 
 { #category : 'starting' }
