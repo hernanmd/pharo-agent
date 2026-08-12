@@ -1648,20 +1648,14 @@ PharoMcpServer >> slotNamesOf: aClassName [
 
 { #category : 'starting' }
 PharoMcpServer >> start [
-
 	self isRunning ifTrue: [ ^ self ].
-
-	transport := McpHttpTransport new
-		             port: port;
-		             yourself.
-	server := McpServer
-		          name: MCPConstants mcpServerName
-		          version: MCPConstants mcpServerVersion.
+	transport := McpHttpTransport new port: port; yourself.
+	server := McpServer name: MCPConstants mcpServerName version: MCPConstants mcpServerVersion.
 	server transport: transport.
 	self registerToolsOn: server.
 	self registerResourcesOn: server.
+	self registerSlotToolsOn: server.
 	server start.
-
 	Transcript
 		show: '[PharoMcpServer] MCP server listening on http://localhost:';
 		show: port printString;
