@@ -72,6 +72,29 @@ PharoMcpServer class >> stop [
 	DefaultInstance ifNotNil: [ DefaultInstance stop ]
 ]
 
+{ #category : 'helpers - slots' }
+PharoMcpServer >> addInstanceVariable: aName in: className [
+	^ self addInstanceVariables: { aName } in: className
+]
+
+{ #category : 'helpers - slots' }
+PharoMcpServer >> addInstanceVariables: nameList in: className [
+	"Add the given instance variables to className (skipping names already present), preserving methods.
+	 nameList may be a string (comma/space separated) or a collection. Answers a status string."
+	| toAdd result |
+	toAdd := (self normalizedNamesFrom: nameList) collect: [ :each | each asSymbol ].
+	toAdd ifEmpty: [ ^ 'ERROR: no instance variable names provided' ].
+	result := self
+		updateSlotsInClassNamed: className
+		with: [ :current |
+			| set |
+			set := current asOrderedCollection.
+			toAdd do: [ :n | (set includes: n) ifFalse: [ set add: n ] ].
+			set asArray ].
+	result isString ifTrue: [ ^ result ].
+	^ 'Added instance variables to ' , className , '. Current: ' , String cr , (String cr join: result)
+]
+
 { #category : 'reflection' }
 PharoMcpServer >> allCallsOnClass: aClassName [
 	"Answer a textual list of every method that refers to the given class, either by its global binding or by using its name as a literal. Returns the string ERROR: ... if the class is not found."
@@ -1224,6 +1247,64 @@ PharoMcpServer >> registerResourcesOn: aServer [
 							   selector: (params at: 'selector'))) } ])
 ]
 
+{ #category : 'helpers - slots' }
+PharoMcpServer >> registerSlotToolsOn: aServer [
+	"Register tools to add/remove instance variables (slots) on an existing class via
+	 ShiftClassBuilder (fillFor: + install), preserving methods. Mirrors createClassNamed:..."
+
+	aServer addTool: (McpTool
+		name: 'pharo_add_instance_variable'
+		description: 'Add a single instance variable (slot) to an existing class, preserving its methods. Returns the new slot list.'
+		inputSchema: (McpSchema
+			object: {
+				('className' -> McpSchema string).
+				('instanceVariable' -> (McpSchema string: 'Name of the instance variable to add')) }
+			required: #('className' 'instanceVariable'))
+		handler: [ :args |
+			McpToolResult successText: (self
+				addInstanceVariable: (args at: 'instanceVariable')
+				in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+		name: 'pharo_remove_instance_variable'
+		description: 'Remove a single instance variable (slot) from an existing class, preserving its methods. Returns the removed name and the new slot list.'
+		inputSchema: (McpSchema
+			object: {
+				('className' -> McpSchema string).
+				('instanceVariable' -> (McpSchema string: 'Name of the instance variable to remove')) }
+			required: #('className' 'instanceVariable'))
+		handler: [ :args |
+			McpToolResult successText: (self
+				removeInstanceVariable: (args at: 'instanceVariable')
+				in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+		name: 'pharo_add_instance_variables'
+		description: 'Add multiple instance variables (slots) to an existing class, preserving its methods. Names already present are skipped. Returns the new slot list.'
+		inputSchema: (McpSchema
+			object: {
+				('className' -> McpSchema string).
+				('instanceVariables' -> (McpSchema string: 'Comma or space-separated instance variable names to add')) }
+			required: #('className' 'instanceVariables'))
+		handler: [ :args |
+			McpToolResult successText: (self
+				addInstanceVariables: (args at: 'instanceVariables')
+				in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+		name: 'pharo_remove_instance_variables'
+		description: 'Remove multiple instance variables (slots) from an existing class, preserving its methods. Absent names are reported but ignored. Returns the new slot list.'
+		inputSchema: (McpSchema
+			object: {
+				('className' -> McpSchema string).
+				('instanceVariables' -> (McpSchema string: 'Comma or space-separated instance variable names to remove')) }
+			required: #('className' 'instanceVariables'))
+		handler: [ :args |
+			McpToolResult successText: (self
+				removeInstanceVariables: (args at: 'instanceVariables')
+				in: (args at: 'className')) ]).
+]
+
 { #category : 'tools' }
 PharoMcpServer >> registerToolsOn: aServer [
 
@@ -1533,6 +1614,33 @@ PharoMcpServer >> registerToolsOn: aServer [
 							  toPackage: (args at: 'package')
 							  tag: (args at: 'tag')) ]).
 	self registerNewToolsOn: aServer
+]
+
+{ #category : 'helpers - slots' }
+PharoMcpServer >> removeInstanceVariable: aName in: className [
+	^ self removeInstanceVariables: { aName } in: className
+]
+
+{ #category : 'helpers - slots' }
+PharoMcpServer >> removeInstanceVariables: nameList in: className [
+	"Remove the given instance variables from className (ignoring absent names), preserving methods.
+	 nameList may be a string (comma/space separated) or a collection. Answers a status string."
+	| toRemove removed result |
+	toRemove := (self normalizedNamesFrom: nameList) collect: [ :each | each asSymbol ].
+	toRemove ifEmpty: [ ^ 'ERROR: no instance variable names provided' ].
+	removed := OrderedCollection new.
+	result := self
+		updateSlotsInClassNamed: className
+		with: [ :current |
+			| set |
+			set := current asOrderedCollection.
+			toRemove do: [ :n |
+				(set includes: n)
+					ifTrue: [ set remove: n. removed add: n ]
+					ifFalse: [ removed add: ('(absent) ' , n asString) ] ].
+			set asArray ].
+	result isString ifTrue: [ ^ result ].
+	^ 'Removed from ' , className , ': ' , (String cr join: removed) , String cr , 'Current: ' , String cr , (String cr join: result)
 ]
 
 { #category : 'modification' }
@@ -1871,4 +1979,18 @@ PharoMcpServer >> unreferencedInstVarsOf: aClassName [
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ self stringsAsLines:
 		  (class allUnreferencedInstanceVariables collect: [ :s | s name ])
+]
+
+{ #category : 'helpers - slots' }
+PharoMcpServer >> updateSlotsInClassNamed: className with: aBlock [
+	"Private - Reinstall className with its local slots replaced by (aBlock value: currentSlotNames),
+	 preserving methods (ShiftClassBuilder fillFor: + install). Answers the new slot names array,
+	 or an 'ERROR: ...' string on failure."
+	| class builder |
+	class := self classNamed: className.
+	class ifNil: [ ^ 'ERROR: class not found: ' , className ].
+	builder := ShiftClassBuilder new fillFor: class.
+	builder slots: (aBlock value: (class slots collect: [ :s | s name ]) asArray).
+	self mutateImageDuring: [ builder install ].
+	^ ((self classNamed: className) slots collect: [ :s | s name ]) asArray
 ]
