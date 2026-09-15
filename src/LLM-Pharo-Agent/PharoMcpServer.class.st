@@ -499,6 +499,177 @@ PharoMcpServer >> protocolNamesOf: aClassName side: sideString [
 ]
 
 { #category : 'tool registration' }
+PharoMcpServer >> registerBasicToolsOn: aServer [
+
+	aServer addTool: (McpTool
+			 name: 'pharo_eval'
+			 description:
+			 'Evaluate a Smalltalk expression in the live Pharo image. Returns the printString of the result.'
+			 inputSchema: (McpSchema
+					  object:
+					  { ('code' -> (McpSchema string: 'Smalltalk source to evaluate')) }
+					  required: #( 'code' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self evaluateSource: (args at: 'code')) ]).
+
+	"Tool 7: pharo_compile_method"
+	aServer addTool: (McpTool
+		name: 'pharo_compile_method'
+		description:'Compile a method in the given class. Returns the compiled selector on success. Optionally specify a protocol and/or class side (metaclass).'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('selector' -> (McpSchema string: 'The method selector, used to validate after compilation')).
+				('sourceCode' -> McpSchema string).
+				('protocol' -> (McpSchema string: 'Optional protocol/category name')).
+				('side' -> (McpSchema string: 'instance (default) or class'))}
+			required: #('className' 'selector' 'sourceCode'))
+		handler: [:args |
+			McpToolResult successText: (self
+				compileMethodSource: (args at: 'sourceCode')
+				forClassNamed: (args at: 'className')
+				protocol: (args at: 'protocol' ifAbsent: [nil])
+				classSide: (self booleanFrom: (args at: 'side' ifAbsent: ['instance']) default: false))]).
+
+	"Tool 8: pharo_create_class"
+	aServer addTool: (McpTool
+		name: 'pharo_create_class'
+		description:'Create a new class using Fluid syntax (<<). Requires superclass name, class name, package. Optionally tag, instance variables (comma/space-separated), class variables.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> (McpSchema string: 'Name of the new class to create')).
+				('superclassName' -> (McpSchema string: 'Name of the superclass')).
+				('packageName' -> McpSchema string).
+				('tag' -> (McpSchema string: 'Optional tag within the package')).
+				('instanceVariables' -> (McpSchema string: 'Optional comma or space-separated instance variable names')).
+				('classVariables' -> (McpSchema string: 'Optional comma or space-separated class variable names'))}
+			required: #('className' 'superclassName' 'packageName'))
+		handler: [:args |
+			McpToolResult successText: (self
+				createClassNamed: (args at: 'className')
+				superclassName: (args at: 'superclassName')
+				packageName: (args at: 'packageName')
+				tag: (args at: 'tag' ifAbsent: [nil])
+				instanceVariables: (args at: 'instanceVariables' ifAbsent: [nil])
+				classVariables: (args at: 'classVariables' ifAbsent: [nil]))]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_class_source'
+			 description: 'Return the class definition and the list of selectors for a class.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self classSourceFor: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_method_source'
+			 description: 'Return the source of a single method.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('selector' -> McpSchema string) }
+					  required: #( 'className' 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  methodSourceFor: (args at: 'className')
+							  selector: (args at: 'selector')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_selectors_in_protocol'
+			 description:
+			 'Answer every selector of the class hierarchy that lives in the named protocol.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('protocol' -> McpSchema string) }
+					  required: #( 'className' 'protocol' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  selectorsInProtocol: (args at: 'protocol')
+							  of: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_extension_selectors'
+			 description:
+			 'Answer every extension selector (method defined in another package than the class own) on the class.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self extensionSelectorsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_is_meta'
+			 description: 'Answer true if the class side of the given class is a metaclass. Direct wrapper of Class>>isMeta.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self isMetaClass: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_ensure_protocol'
+			 description: 'Ensure the named protocol exists on the class, creating it if necessary. Returns the protocol name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('protocol' -> McpSchema string) }
+					  required: #( 'className' 'protocol' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  ensureProtocol: (args at: 'protocol')
+							  in: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_remove_method'
+			 description:
+			 'Remove the named method from the given class. Returns "removed" on success, "not present" if the method was not present.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('selector' -> McpSchema string) }
+					  required: #( 'className' 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  removeMethod: (args at: 'selector')
+							  from: (args at: 'className')) ]).
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerDocumentationToolsOn: aServer [
+
+	"Tool 3: pharo_class_comment"
+	aServer addTool: (McpTool
+		name: 'pharo_class_comment'
+		description: 'Return the class comment of the given class.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classCommentOf: (args at: 'className'))]).
+
+	"Tool 4: pharo_class_has_comment"
+	aServer addTool: (McpTool
+		name: 'pharo_class_has_comment'
+		description: 'Answer true if the given class has a non-empty comment.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classHasComment: (args at: 'className'))]).
+
+]
+
+{ #category : 'tool registration' }
 PharoMcpServer >> registerIcebergTools2On: aServer [
 
 	"IceRepository: modifiedPackages"
@@ -862,173 +1033,7 @@ PharoMcpServer >> registerIcebergToolsOn: aServer [
 ]
 
 { #category : 'tool registration' }
-PharoMcpServer >> registerNewToolsOn: aServer [
-
-	"Tool 1: pharo_class_side_source"
-	aServer addTool: (McpTool
-		name: 'pharo_class_side_source'
-		description: 'Return the class definition and selector list for the class side (metaclass) of the given class.'
-		inputSchema: (McpSchema
-			object: {('className' -> McpSchema string)}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText:
-				(self classSideSourceFor: (args at: 'className'))]).
-
-	"Tool 2: pharo_class_side_method_source"
-	aServer addTool: (McpTool
-		name: 'pharo_class_side_method_source'
-		description: 'Return the source of a single method on the class side (metaclass) of the given class.'
-		inputSchema: (McpSchema
-			object: {(
-				'className' -> McpSchema string).
-				('selector' -> McpSchema string)}
-			required: #('className' 'selector'))
-		handler: [:args |
-			McpToolResult successText: (self
-				methodSourceFor: (args at: 'className')
-				selector: (args at: 'selector')
-				classSide: true)]).
-
-	"Tool 3: pharo_class_comment"
-	aServer addTool: (McpTool
-		name: 'pharo_class_comment'
-		description: 'Return the class comment of the given class.'
-		inputSchema: (McpSchema
-			object: {('className' -> McpSchema string)}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText:
-				(self classCommentOf: (args at: 'className'))]).
-
-	"Tool 4: pharo_class_has_comment"
-	aServer addTool: (McpTool
-		name: 'pharo_class_has_comment'
-		description: 'Answer true if the given class has a non-empty comment.'
-		inputSchema: (McpSchema
-			object: {('className' -> McpSchema string)}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText:
-				(self classHasComment: (args at: 'className'))]).
-
-	"Tool 5: pharo_subclasses"
-	aServer addTool: (McpTool
-		name: 'pharo_subclasses'
-		description:'Answer the subclass names of the given class. Set direct to true for only direct subclasses, false (default) for all subclasses.'
-		inputSchema: (McpSchema
-			object: {(
-				'className' -> McpSchema string).
-				('direct' -> (McpSchema string: 'true for direct subclasses only, false (default) for all subclasses'))}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText: (self
-				subclassesOf: (args at: 'className')
-				direct: (self booleanFrom: (args at: 'direct' ifAbsent: ['false']) default: false))]).
-
-	"Tool 6: pharo_superclasses"
-	aServer addTool: (McpTool
-		name: 'pharo_superclasses'
-		description: 'Answer the superclass names of the given class, from immediate superclass up to Object.'
-		inputSchema: (McpSchema
-			object: {('className' -> McpSchema string)}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText:
-				(self superclassesOf: (args at: 'className'))]).
-
-	"Tool 7: pharo_compile_method"
-	aServer addTool: (McpTool
-		name: 'pharo_compile_method'
-		description:'Compile a method in the given class. Returns the compiled selector on success. Optionally specify a protocol and/or class side (metaclass).'
-		inputSchema: (McpSchema
-			object: {(
-				'className' -> McpSchema string).
-				('selector' -> (McpSchema string: 'The method selector, used to validate after compilation')).
-				('sourceCode' -> McpSchema string).
-				('protocol' -> (McpSchema string: 'Optional protocol/category name')).
-				('side' -> (McpSchema string: 'instance (default) or class'))}
-			required: #('className' 'selector' 'sourceCode'))
-		handler: [:args |
-			McpToolResult successText: (self
-				compileMethodSource: (args at: 'sourceCode')
-				forClassNamed: (args at: 'className')
-				protocol: (args at: 'protocol' ifAbsent: [nil])
-				classSide: (self booleanFrom: (args at: 'side' ifAbsent: ['instance']) default: false))]).
-
-	"Tool 8: pharo_create_class"
-	aServer addTool: (McpTool
-		name: 'pharo_create_class'
-		description:'Create a new class using Fluid syntax (<<). Requires superclass name, class name, package. Optionally tag, instance variables (comma/space-separated), class variables.'
-		inputSchema: (McpSchema
-			object: {(
-				'className' -> (McpSchema string: 'Name of the new class to create')).
-				('superclassName' -> (McpSchema string: 'Name of the superclass')).
-				('packageName' -> McpSchema string).
-				('tag' -> (McpSchema string: 'Optional tag within the package')).
-				('instanceVariables' -> (McpSchema string: 'Optional comma or space-separated instance variable names')).
-				('classVariables' -> (McpSchema string: 'Optional comma or space-separated class variable names'))}
-			required: #('className' 'superclassName' 'packageName'))
-		handler: [:args |
-			McpToolResult successText: (self
-				createClassNamed: (args at: 'className')
-				superclassName: (args at: 'superclassName')
-				packageName: (args at: 'packageName')
-				tag: (args at: 'tag' ifAbsent: [nil])
-				instanceVariables: (args at: 'instanceVariables' ifAbsent: [nil])
-				classVariables: (args at: 'classVariables' ifAbsent: [nil]))]).
-
-	"Tool 9: pharo_protocol_names"
-	aServer addTool: (McpTool
-		name: 'pharo_protocol_names'
-		description: 'Answer the list of protocol (category) names for the given class. Set side to class for class-side protocols.'
-		inputSchema: (McpSchema
-			object: {(
-				'className' -> McpSchema string).
-				('side' -> (McpSchema string: 'instance (default) or class'))}
-			required: #('className'))
-		handler: [:args |
-			McpToolResult successText: (self
-				protocolNamesOf: (args at: 'className')
-				side: (args at: 'side' ifAbsent: ['instance']))]).
-
-	self registerIcebergToolsOn: aServer.
-	self registerIcebergTools2On: aServer.
-	self registerIcebergTools3On: aServer
-]
-
-{ #category : 'accessing' }
-PharoMcpServer >> registerResourcesOn: aServer [
-
-	aServer addResource: (McpResource
-			 uri: 'pharo://system/info'
-			 name: 'Pharo System Info'
-			 description: 'Pharo version and image identity'
-			 mimeType: 'text/plain'
-			 handler: [ { (McpContentItem text: self systemInfoString) } ]).
-
-	aServer addResourceTemplate: (McpResourceTemplate
-			 uriTemplate: 'pharo://class/{className}'
-			 name: 'Class Source'
-			 description: 'Definition and method list of a class'
-			 mimeType: 'text/plain'
-			 handler: [ :params |
-					 { (McpContentItem text:
-						  (self classSourceFor: (params at: 'className'))) } ]).
-
-	aServer addResourceTemplate: (McpResourceTemplate
-			 uriTemplate: 'pharo://method/{className}/{selector}'
-			 name: 'Method Source'
-			 description: 'Source code of a single method'
-			 mimeType: 'text/plain'
-			 handler: [ :params |
-					 { (McpContentItem text: (self
-							   methodSourceFor: (params at: 'className')
-							   selector: (params at: 'selector'))) } ])
-]
-
-{ #category : 'helpers - slots' }
-PharoMcpServer >> registerSlotToolsOn: aServer [
+PharoMcpServer >> registerInstanceVariableToolsOn: aServer [
 	"Register tools to add/remove instance variables (slots) on an existing class via
 	 ShiftClassBuilder (fillFor: + install), preserving methods. Mirrors createClassNamed:..."
 
@@ -1083,22 +1088,218 @@ PharoMcpServer >> registerSlotToolsOn: aServer [
 			McpToolResult successText: (self
 				removeInstanceVariables: (args at: 'instanceVariables')
 				in: (args at: 'className')) ]).
-]
-
-{ #category : 'tools' }
-PharoMcpServer >> registerToolsOn: aServer [
+			
+	aServer addTool: (McpTool
+			 name: 'pharo_has_inst_var_named'
+			 description: 'Answer true if the class hierarchy defines an instance variable with the given name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('name' -> McpSchema string) }
+					  required: #( 'className' 'name' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  hasInstVarNamed: (args at: 'name')
+							  in: (args at: 'className')) ]).
 
 	aServer addTool: (McpTool
-			 name: 'pharo_eval'
-			 description:
-			 'Evaluate a Smalltalk expression in the live Pharo image. Returns the printString of the result.'
+			 name: 'pharo_all_inst_var_names'
+			 description: 'Answer every instance variable name known to the class hierarchy.'
 			 inputSchema: (McpSchema
-					  object:
-					  { ('code' -> (McpSchema string: 'Smalltalk source to evaluate')) }
-					  required: #( 'code' ))
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self allInstVarNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_inst_var_names'
+			 description:
+			 'Answer the instance variable names declared locally on the class (not inherited).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self instVarNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_unreferenced_inst_vars'
+			 description: 'Answer the slot names known to the class hierarchy that are not referenced by any method.'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args | McpToolResult successText: (self unreferencedInstVarsOf: (args at: 'className')) ]).
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerNewToolsOn: aServer [
+
+	"Tool 1: pharo_class_side_source"
+	aServer addTool: (McpTool
+		name: 'pharo_class_side_source'
+		description: 'Return the class definition and selector list for the class side (metaclass) of the given class.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self classSideSourceFor: (args at: 'className'))]).
+
+	"Tool 2: pharo_class_side_method_source"
+	aServer addTool: (McpTool
+		name: 'pharo_class_side_method_source'
+		description: 'Return the source of a single method on the class side (metaclass) of the given class.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('selector' -> McpSchema string)}
+			required: #('className' 'selector'))
+		handler: [:args |
+			McpToolResult successText: (self
+				methodSourceFor: (args at: 'className')
+				selector: (args at: 'selector')
+				classSide: true)]).
+
+	"Tool 5: pharo_subclasses"
+	aServer addTool: (McpTool
+		name: 'pharo_subclasses'
+		description:'Answer the subclass names of the given class. Set direct to true for only direct subclasses, false (default) for all subclasses.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('direct' -> (McpSchema string: 'true for direct subclasses only, false (default) for all subclasses'))}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText: (self
+				subclassesOf: (args at: 'className')
+				direct: (self booleanFrom: (args at: 'direct' ifAbsent: ['false']) default: false))]).
+
+	"Tool 6: pharo_superclasses"
+	aServer addTool: (McpTool
+		name: 'pharo_superclasses'
+		description: 'Answer the superclass names of the given class, from immediate superclass up to Object.'
+		inputSchema: (McpSchema
+			object: {('className' -> McpSchema string)}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText:
+				(self superclassesOf: (args at: 'className'))]).
+
+	"Tool 9: pharo_protocol_names"
+	aServer addTool: (McpTool
+		name: 'pharo_protocol_names'
+		description: 'Answer the list of protocol (category) names for the given class. Set side to class for class-side protocols.'
+		inputSchema: (McpSchema
+			object: {(
+				'className' -> McpSchema string).
+				('side' -> (McpSchema string: 'instance (default) or class'))}
+			required: #('className'))
+		handler: [:args |
+			McpToolResult successText: (self
+				protocolNamesOf: (args at: 'className')
+				side: (args at: 'side' ifAbsent: ['instance']))]).
+
+"	self registerIcebergToolsOn: aServer.
+	self registerIcebergTools2On: aServer.
+	self registerIcebergTools3On: aServer"
+]
+
+{ #category : 'accessing' }
+PharoMcpServer >> registerResourcesOn: aServer [
+
+	aServer addResource: (McpResource
+			 uri: 'pharo://system/info'
+			 name: 'Pharo System Info'
+			 description: 'Pharo version and image identity'
+			 mimeType: 'text/plain'
+			 handler: [ { (McpContentItem text: self systemInfoString) } ]).
+
+	aServer addResourceTemplate: (McpResourceTemplate
+			 uriTemplate: 'pharo://class/{className}'
+			 name: 'Class Source'
+			 description: 'Definition and method list of a class'
+			 mimeType: 'text/plain'
+			 handler: [ :params |
+					 { (McpContentItem text:
+						  (self classSourceFor: (params at: 'className'))) } ]).
+
+	aServer addResourceTemplate: (McpResourceTemplate
+			 uriTemplate: 'pharo://method/{className}/{selector}'
+			 name: 'Method Source'
+			 description: 'Source code of a single method'
+			 mimeType: 'text/plain'
+			 handler: [ :params |
+					 { (McpContentItem text: (self
+							   methodSourceFor: (params at: 'className')
+							   selector: (params at: 'selector'))) } ])
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerSlotAccessToolsOn: aServer [
+
+	aServer addTool: (McpTool
+			 name: 'pharo_has_slot'
+			 description:
+			 'Answer true if the class hierarchy defines a slot with the given name.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('name' -> McpSchema string) }
+					  required: #( 'className' 'name' ))
+			 handler: [ :args |
+					 McpToolResult successText:
+						 (self
+							  hasSlotNamed: (args at: 'name')
+							  in: (args at: 'className')) ]).
+						
+					
+	aServer addTool: (McpTool
+			 name: 'pharo_slot_names'
+			 description:
+			 'Answer the slot names declared locally on the class (not inherited).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
 			 handler: [ :args |
 				 McpToolResult successText:
-					 (self evaluateSource: (args at: 'code')) ]).
+					 (self slotNamesOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_all_slots'
+			 description:
+			 'Answer every slot visible in the class hierarchy, one per line, formatted as name=>(SlotClass).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self allSlotsOf: (args at: 'className')) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_local_slots'
+			 description:
+			 'Answer every slot declared locally on the class (not inherited), one per line, formatted as name=>(SlotClass).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+				 McpToolResult successText:
+					 (self localSlotsOf: (args at: 'className')) ]).
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerToolsOn: aServer [
+
+	self registerBasicToolsOn: aServer.
+	self registerXRefToolsOn: aServer.
+	self registerInstanceVariableToolsOn: aServer.
+	self registerNewToolsOn: aServer
+]
+
+{ #category : 'tool registration' }
+PharoMcpServer >> registerUIToolsOn: aServer [
 
 	aServer addTool: (McpTool
 			 name: 'pharo_open_class_browser'
@@ -1155,30 +1356,10 @@ PharoMcpServer >> registerToolsOn: aServer [
 																 selector: selector ].
 														 McpToolResult successText:
 															 'Browser requested for method ' , ref ] ] ] ]).
+]
 
-	aServer addTool: (McpTool
-			 name: 'pharo_class_source'
-			 description:
-			 'Return the class definition and the list of selectors for a class.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self classSourceFor: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_method_source'
-			 description: 'Return the source of a single method.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('selector' -> McpSchema string) }
-					  required: #( 'className' 'selector' ))
-			 handler: [ :args |
-					 McpToolResult successText: (self
-							  methodSourceFor: (args at: 'className')
-							  selector: (args at: 'selector')) ]).
+{ #category : 'tool registration' }
+PharoMcpServer >> registerXRefToolsOn: aServer [
 
 	aServer addTool: (McpTool
 			 name: 'pharo_class_references'
@@ -1216,184 +1397,6 @@ PharoMcpServer >> registerToolsOn: aServer [
 						 (self
 							  localSendersOf: (args at: 'selector')
 							  in: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_selectors_in_protocol'
-			 description:
-			 'Answer every selector of the class hierarchy that lives in the named protocol.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('protocol' -> McpSchema string) }
-					  required: #( 'className' 'protocol' ))
-			 handler: [ :args |
-					 McpToolResult successText: (self
-							  selectorsInProtocol: (args at: 'protocol')
-							  of: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_extension_selectors'
-			 description:
-			 'Answer every extension selector (method defined in another package than the class own) on the class.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self extensionSelectorsOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_has_inst_var_named'
-			 description:
-			 'Answer true if the class hierarchy defines an instance variable with the given name.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('name' -> McpSchema string) }
-					  required: #( 'className' 'name' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self
-							  hasInstVarNamed: (args at: 'name')
-							  in: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_has_slot'
-			 description:
-			 'Answer true if the class hierarchy defines a slot with the given name.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('name' -> McpSchema string) }
-					  required: #( 'className' 'name' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self
-							  hasSlotNamed: (args at: 'name')
-							  in: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_all_inst_var_names'
-			 description:
-			 'Answer every instance variable name known to the class hierarchy.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self allInstVarNamesOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_inst_var_names'
-			 description:
-			 'Answer the instance variable names declared locally on the class (not inherited).'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self instVarNamesOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_slot_names'
-			 description:
-			 'Answer the slot names declared locally on the class (not inherited).'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-				 McpToolResult successText:
-					 (self slotNamesOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_all_slots'
-			 description:
-			 'Answer every slot visible in the class hierarchy, one per line, formatted as name=>(SlotClass).'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-				 McpToolResult successText:
-					 (self allSlotsOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_local_slots'
-			 description:
-			 'Answer every slot declared locally on the class (not inherited), one per line, formatted as name=>(SlotClass).'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-				 McpToolResult successText:
-					 (self localSlotsOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_unreferenced_inst_vars'
-			 description:
-			 'Answer the slot names known to the class hierarchy that are not referenced by any method.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self unreferencedInstVarsOf: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_is_meta'
-			 description:
-			 'Answer true if the class side of the given class is a metaclass. Direct wrapper of Class>>isMeta.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-				 McpToolResult successText:
-					 (self isMetaClass: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_ensure_protocol'
-			 description:
-			 'Ensure the named protocol exists on the class, creating it if necessary. Returns the protocol name.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('protocol' -> McpSchema string) }
-					  required: #( 'className' 'protocol' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self
-							  ensureProtocol: (args at: 'protocol')
-							  in: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_remove_method'
-			 description:
-			 'Remove the named method from the given class. Returns "removed" on success, "not present" if the method was not present.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('selector' -> McpSchema string) }
-					  required: #( 'className' 'selector' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self
-							  removeMethod: (args at: 'selector')
-							  from: (args at: 'className')) ]).
-
-	aServer addTool: (McpTool
-			 name: 'pharo_move_class_to_package_tag'
-			 description: 'Move the named class to the given package and tag.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('package' -> McpSchema string).
-							  ('tag' -> McpSchema string) }
-					  required: #( 'className' 'package' 'tag' ))
-			 handler: [ :args |
-					 McpToolResult successText: (self
-							  moveClass: (args at: 'className')
-							  toPackage: (args at: 'package')
-							  tag: (args at: 'tag')) ]).
-	self registerNewToolsOn: aServer
 ]
 
 { #category : 'helpers - slots' }
@@ -1470,7 +1473,6 @@ PharoMcpServer >> start [
 	server transport: transport.
 	self registerToolsOn: server.
 	self registerResourcesOn: server.
-	self registerSlotToolsOn: server.
 	server start.
 	Transcript
 		show: '[PharoMcpServer] MCP server listening on http://localhost:';
