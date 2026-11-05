@@ -4,7 +4,8 @@ Class {
 	#instVars : [
 		'server',
 		'transport',
-		'port'
+		'port',
+		'sendersCache'
 	],
 	#classVars : [
 		'DefaultInstance'
@@ -95,14 +96,22 @@ PharoMcpServer >> addInstanceVariables: nameList in: className [
 	^ 'Added instance variables to ' , className , '. Current: ' , String cr , (String cr join: result)
 ]
 
-{ #category : 'reflection' }
+{ #category : 'navigation' }
 PharoMcpServer >> allCallsOnClass: aClassName [
-	"Answer a textual list of every method that refers to the given class, either by its global binding or by using its name as a literal. Returns the string ERROR: ... if the class is not found."
+	^ self allCallsOnClass: aClassName offset: nil limit: nil
+]
 
+{ #category : 'navigation' }
+PharoMcpServer >> allCallsOnClass: aClassName offset: anOffset limit: aLimit [
 	| class |
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
-	^ self methodsAsLines: class allCallsOn
+	^ self
+		linesAsText: (self
+			cachedLinesAt: { #classRefs. class name }
+			ifAbsent: [ class allCallsOn ])
+		offset: anOffset
+		limit: aLimit
 ]
 
 { #category : 'reflection' }
@@ -157,6 +166,18 @@ PharoMcpServer >> booleanFrom: anObject default: aBoolean [
 		(#( 'true' 'yes' '1' ) includes: value) ifTrue: [ ^ true ].
 		(#( 'false' 'no' '0' ) includes: value) ifTrue: [ ^ false ] ].
 	^ aBoolean
+]
+
+{ #category : 'caching' }
+PharoMcpServer >> cachedLinesAt: aKey ifAbsent: aBlock [
+	"Answer the cached SORTED Array of printString lines for navigation query aKey, computing it with
+	 aBlock (which returns a collection of CompiledMethods) on a miss. The sort is decorate-sort-undo so
+	 each printString is built once; the result is cached so later paging over the same query is free."
+
+	^ self sendersCache
+		  at: aKey
+		  ifAbsentPut: [
+			  (aBlock value collect: [ :m | m printString ]) asArray sort: [ :a :b | a <= b ] ]
 ]
 
 { #category : 'helpers - class comment' }
@@ -302,6 +323,14 @@ PharoMcpServer >> extensionSelectorsOf: aClassName [
 	^ self stringsAsLines: class extensionSelectors
 ]
 
+{ #category : 'caching' }
+PharoMcpServer >> flushSendersCache [
+	"Drop all memoized navigation results. Called on any image method change via SystemAnnouncer, and
+	 safe to call directly. Does not re-create the dictionary so an in-flight reader keeps its own ref."
+
+	sendersCache ifNotNil: [ sendersCache removeAll ]
+]
+
 { #category : 'reflection' }
 PharoMcpServer >> hasInstVarNamed: aName in: aClassName [
 	"Answer true if the given class defines an instance variable with the given name."
@@ -369,15 +398,42 @@ PharoMcpServer >> isRunning [
 	^ transport isNotNil and: [ transport isRunning ]
 ]
 
-{ #category : 'reflection' }
-PharoMcpServer >> localSendersOf: aSymbolString in: aClassName [
-	"Answer a textual list of every method in the given class hierarchy that sends aSymbol."
+{ #category : 'formatting' }
+PharoMcpServer >> linesAsText: sortedLines offset: anOffset limit: aLimit [
+	"Page an already-sorted Array of string lines and prefix a # count header. offset default 0,
+	 limit nil = all. The header always states the total; when a window is shown it says the range."
 
+	| total lo hi window |
+	total := sortedLines size.
+	lo := (anOffset ifNil: [ 0 ]) max: 0.
+	hi := aLimit ifNil: [ total ] ifNotNil: [ (lo + aLimit) min: total ].
+	window := lo >= total ifTrue: [ #(  ) ] ifFalse: [ sortedLines copyFrom: lo + 1 to: hi ].
+	^ String streamContents: [ :s |
+		s nextPutAll: '# '; print: total; nextPutAll: ' result(s)'.
+		(aLimit notNil and: [ total > window size ]) ifTrue: [
+			s nextPutAll: ', showing '; print: lo; nextPutAll: '..'; print: lo + window size;
+			  nextPutAll: ' (pass offset/limit to page)' ].
+		s cr.
+		window do: [ :line | s nextPutAll: line; cr ] ]
+]
+
+{ #category : 'navigation' }
+PharoMcpServer >> localSendersOf: aSymbolString in: aClassName [
+	^ self localSendersOf: aSymbolString in: aClassName offset: nil limit: nil
+]
+
+{ #category : 'navigation' }
+PharoMcpServer >> localSendersOf: aSymbolString in: aClassName offset: anOffset limit: aLimit [
 	| class selector |
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	selector := aSymbolString trimBoth asSymbol.
-	^ self methodsAsLines: (class allLocalCallsOn: selector)
+	^ self
+		linesAsText: (self
+			cachedLinesAt: { #localSenders. class name. selector }
+			ifAbsent: [ class allLocalCallsOn: selector ])
+		offset: anOffset
+		limit: aLimit
 ]
 
 { #category : 'reflection' }
@@ -391,14 +447,24 @@ PharoMcpServer >> localSlotsOf: aClassName [
 		  (class localSlots collect: [ :s | s printString ])
 ]
 
-{ #category : 'reflection' }
+{ #category : 'navigation' }
 PharoMcpServer >> methodSendersOf: aSelector [
-	"Answer a textual list of every method in the image that sends the given selector."
+	"Textual list of every method in the image that sends aSelector, # count header then one per line,
+	 sorted. Cached per selector; flushed on any image method change."
 
+	^ self methodSendersOf: aSelector offset: nil limit: nil
+]
+
+{ #category : 'navigation' }
+PharoMcpServer >> methodSendersOf: aSelector offset: anOffset limit: aLimit [
 	| selector |
 	selector := aSelector trimBoth asSymbol.
-	^ self methodsAsLines:
-		  (SystemNavigation default allSendersOf: selector)
+	^ self
+		linesAsText: (self
+			cachedLinesAt: { #senders. selector }
+			ifAbsent: [ SystemNavigation default allSendersOf: selector ])
+		offset: anOffset
+		limit: aLimit
 ]
 
 { #category : 'private' }
@@ -426,14 +492,6 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector classSide: cla
 	(behavior includesSelector: selector) 
 		ifFalse: [ ^ 'ERROR: selector not found: ' , behavior name , '>>' , aSelector ].
 	^ (behavior >> selector) sourceCode
-]
-
-{ #category : 'private - formatting' }
-PharoMcpServer >> methodsAsLines: methods [
-	"Answer a newline-joined textual list of method references, one per line."
-
-	^ String cr join:
-		  (methods asOrderedCollection collect: [ :m | m printString ])
 ]
 
 { #category : 'modification' }
@@ -1358,45 +1416,60 @@ PharoMcpServer >> registerUIToolsOn: aServer [
 															 'Browser requested for method ' , ref ] ] ] ]).
 ]
 
-{ #category : 'tool registration' }
+{ #category : 'tools' }
 PharoMcpServer >> registerXRefToolsOn: aServer [
+	"Cross-reference search tools. Each does a whole-image scan (memoised per query, flushed on any
+	 method change) and accepts optional offset/limit paging — results can be thousands of lines, so the
+	 default limit keeps responses small; pass limit:0-or-absent semantics via the paging helper."
+
+	| pagingProps readOffset readLimit |
+	pagingProps := {
+		('offset' -> (McpSchema integer: 'Result offset (default 0)')).
+		('limit' -> (McpSchema integer: 'Max results (default 200; omit via a large value for all)')) }.
+	readOffset := [ :args | args at: 'offset' ifAbsent: [ 0 ] ].
+	readLimit := [ :args | args at: 'limit' ifAbsent: [ 200 ] ].
 
 	aServer addTool: (McpTool
-			 name: 'pharo_class_references'
-			 description:
-			 'Answer every method in the image that refers to the given class by name or as a global binding. Returns one method per line as Class>>selector.'
-			 inputSchema: (McpSchema
-					  object: { ('className' -> McpSchema string) }
-					  required: #( 'className' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self allCallsOnClass: (args at: 'className')) ]).
+		 name: 'pharo_class_references'
+		 description:
+		 'Answer every method in the image that refers to the given class by name or as a global binding. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+		 inputSchema: (McpSchema
+			 object: { ('className' -> McpSchema string) } , pagingProps
+			 required: #( 'className' ))
+		 handler: [ :args |
+			 McpToolResult successText: (self
+				 allCallsOnClass: (args at: 'className')
+				 offset: (readOffset value: args)
+				 limit: (readLimit value: args)) ]).
 
 	aServer addTool: (McpTool
-			 name: 'pharo_method_senders'
-			 description:
-			 'Answer every method in the image that sends the given selector. Returns one method per line as Class>>selector.'
-			 inputSchema: (McpSchema
-					  object: { ('selector' -> McpSchema string) }
-					  required: #( 'selector' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self methodSendersOf: (args at: 'selector')) ]).
+		 name: 'pharo_method_senders'
+		 description:
+		 'Answer every method in the image that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+		 inputSchema: (McpSchema
+			 object: { ('selector' -> McpSchema string) } , pagingProps
+			 required: #( 'selector' ))
+		 handler: [ :args |
+			 McpToolResult successText: (self
+				 methodSendersOf: (args at: 'selector')
+				 offset: (readOffset value: args)
+				 limit: (readLimit value: args)) ]).
 
 	aServer addTool: (McpTool
-			 name: 'pharo_local_senders'
-			 description:
-			 'Answer every method in the given class hierarchy that sends the given selector. Returns one method per line as Class>>selector.'
-			 inputSchema: (McpSchema
-					  object: {
-							  ('className' -> McpSchema string).
-							  ('selector' -> McpSchema string) }
-					  required: #( 'className' 'selector' ))
-			 handler: [ :args |
-					 McpToolResult successText:
-						 (self
-							  localSendersOf: (args at: 'selector')
-							  in: (args at: 'className')) ]).
+		 name: 'pharo_local_senders'
+		 description:
+		 'Answer every method in the given class hierarchy that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+		 inputSchema: (McpSchema
+			 object: {
+				 ('className' -> McpSchema string).
+				 ('selector' -> McpSchema string) } , pagingProps
+			 required: #( 'className' 'selector' ))
+		 handler: [ :args |
+			 McpToolResult successText: (self
+				 localSendersOf: (args at: 'selector')
+				 in: (args at: 'className')
+				 offset: (readOffset value: args)
+				 limit: (readLimit value: args)) ])
 ]
 
 { #category : 'helpers - slots' }
@@ -1447,6 +1520,17 @@ PharoMcpServer >> selectorsInProtocol: aProtocolName of: aClassName [
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ self stringsAsLines: (class allSelectorsInProtocol: aProtocolName)
+]
+
+{ #category : 'caching' }
+PharoMcpServer >> sendersCache [
+	"Lazy per-server memo of expensive whole-image navigation scans (allSendersOf:, allCallsOn,
+	 allLocalCallsOn:). Keyed by a small Array describing the query. Flushed wholesale whenever any
+	 method is added/removed/changed in the image (see subscribeToSystemChanges)."
+
+	^ sendersCache ifNil: [
+		self subscribeToSystemChanges.
+		sendersCache := Dictionary new ]
 ]
 
 { #category : 'accessing' }
@@ -1512,6 +1596,18 @@ PharoMcpServer >> subclassesOf: aClassName direct: directBoolean [
 	^ self stringsAsLines: (directBoolean
 		ifTrue: [ class subclasses collect: #name ]
 		ifFalse: [ class allSubclasses collect: #name])
+]
+
+{ #category : 'caching' }
+PharoMcpServer >> subscribeToSystemChanges [
+	"Invalidate the senders cache on any method-level system change. One subscription per server
+	 instance; SystemAnnouncer ignores a re-subscribe of the same receiver+selector so this is idempotent."
+
+	SystemAnnouncer uniqueInstance weak
+		when: MethodAdded send: #flushSendersCache to: self;
+		when: MethodRemoved send: #flushSendersCache to: self;
+		when: MethodModified send: #flushSendersCache to: self;
+		when: ClassRemoved send: #flushSendersCache to: self
 ]
 
 { #category : 'helpers - hierarchy' }
