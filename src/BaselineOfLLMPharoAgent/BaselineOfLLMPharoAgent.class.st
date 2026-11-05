@@ -10,9 +10,23 @@ BaselineOfLLMPharoAgent >> baseline: spec [
 
 	<baseline>
 	spec for: #common do: [
-			spec baseline: 'PharoLLMIcon' with: [ spec repository: 'github://pharo-llm/pharo-llm-icon:main/src' ].
-			spec baseline: 'LLMPharoMCP' with: [ spec repository: 'github://hernanmd/pharo-mcp:patch/src' ].
 			spec
-				package: 'LLM-Pharo-Agent';
-				package: 'LLM-Pharo-Agent-Tests' with: [ spec requires: #( 'LLM-Pharo-Agent' ) ] ]
+				baseline: 'PharoLLMIcon'
+				with: [
+				spec repository: 'github://pharo-llm/pharo-llm-icon:main/src' ].
+			spec
+				baseline: 'LLMPharoMCP'
+				with: [ spec repository: 'github://hernanmd/pharo-mcp:patch/src' ].
+			spec
+				baseline: 'ISONCore'
+				with: [ spec repository: 'github://hernanmd/ison-pharo:master/src' ].
+			spec
+				package: 'LLM-Pharo-Agent'
+				with: [ spec requires: #( 'ISONCore' ) ];
+				package: 'LLM-Pharo-Agent-Tests'
+				with: [ spec requires: #( 'LLM-Pharo-Agent' ) ].
+			spec
+				group: 'Core' with: #( 'LLM-Pharo-Agent' );
+				group: 'Tests' with: #( 'LLM-Pharo-Agent-Tests' );
+				group: 'default' with: #( 'Core' 'Tests' ) ]
 ]

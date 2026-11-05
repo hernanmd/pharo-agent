@@ -98,20 +98,24 @@ PharoMcpServer >> addInstanceVariables: nameList in: className [
 
 { #category : 'navigation' }
 PharoMcpServer >> allCallsOnClass: aClassName [
+
 	^ self allCallsOnClass: aClassName offset: nil limit: nil
 ]
 
 { #category : 'navigation' }
 PharoMcpServer >> allCallsOnClass: aClassName offset: anOffset limit: aLimit [
+
 	| class |
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ self
-		linesAsText: (self
-			cachedLinesAt: { #classRefs. class name }
-			ifAbsent: [ class allCallsOn ])
-		offset: anOffset
-		limit: aLimit
+		  linesAsText: (self
+				   cachedLinesAt: {
+						   #classRefs.
+						   class name }
+				   ifAbsent: [ class allCallsOn ])
+		  offset: anOffset
+		  limit: aLimit
 ]
 
 { #category : 'reflection' }
@@ -174,10 +178,48 @@ PharoMcpServer >> cachedLinesAt: aKey ifAbsent: aBlock [
 	 aBlock (which returns a collection of CompiledMethods) on a miss. The sort is decorate-sort-undo so
 	 each printString is built once; the result is cached so later paging over the same query is free."
 
-	^ self sendersCache
-		  at: aKey
-		  ifAbsentPut: [
-			  (aBlock value collect: [ :m | m printString ]) asArray sort: [ :a :b | a <= b ] ]
+	^ self sendersCache at: aKey ifAbsentPut: [
+			  (aBlock value collect: [ :m | m printString ]) asArray sort: [
+				  :a
+				  :b | a <= b ] ]
+]
+
+{ #category : 'batch' }
+PharoMcpServer >> changeImpactOf: aClassName selector: aSelectorOrNil [
+	"References + senders + subclasses + implementors in one cached pass. If aSelectorOrNil is given, also
+	 the senders/implementors of that selector. Each list is pre-sorted line text (reuses the senders
+	 cache). Answers a neutral dict of { kind -> {count, lines} } so JSON and IR-ISON both project cleanly."
+
+	| class result |
+	class := self classNamed: aClassName.
+	class ifNil: [
+			^ Dictionary new
+				  at: 'error' put: 'class not found: ' , aClassName;
+				  yourself ].
+	result := Dictionary new.
+	result at: 'className' put: class name.
+	result at: 'classReferences' put: (self impactEntryLines: (self
+				  cachedLinesAt: {
+						  #classRefs.
+						  class name }
+				  ifAbsent: [ class allCallsOn ])).
+	result at: 'subclasses' put: (self impactEntryLines:
+			 (class allSubclasses collect: [ :c | c name ]) asSortedCollection
+				 asArray).
+	aSelectorOrNil ifNotNil: [ :sel |
+			| symbol |
+			symbol := sel trimBoth asSymbol.
+			result at: 'selector' put: symbol asString.
+			result at: 'senders' put: (self impactEntryLines: (self
+						  cachedLinesAt: {
+								  #senders.
+								  symbol }
+						  ifAbsent: [ SystemNavigation default allSendersOf: symbol ])).
+			result at: 'implementors' put: (self impactEntryLines:
+					 ((SystemNavigation default allImplementorsOf: symbol) collect: [
+						  :m | m methodClass name , '>>' , m selector ])
+						 asSortedCollection asArray) ].
+	^ result
 ]
 
 { #category : 'helpers - class comment' }
@@ -187,6 +229,39 @@ PharoMcpServer >> classCommentOf: aClassName [
 	(class := self classNamed: aClassName)
 		ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	^ class comment
+]
+
+{ #category : 'batch' }
+PharoMcpServer >> classDigestFor: aClassName side: aSide includeSources: aSelectorListOrBool [
+	"One-call class overview. aSide: 'instance' | 'class' | 'both' (default instance). includeSources:
+	 true = all selectors on the chosen side(s); an array = only those; false/nil = none. Answers a neutral
+	 dict: definition(s), comment, superclasses, instanceVariables, protocol->selector map, and the
+	 requested method sources. Replaces the class_source + fan-out of method_source/protocol calls."
+
+	| class result sides |
+	class := self classNamed: aClassName.
+	class ifNil: [
+			^ Dictionary new
+				  at: 'error' put: 'class not found: ' , aClassName;
+				  yourself ].
+	result := Dictionary new.
+	result at: 'className' put: class name.
+	result at: 'comment' put: (class hasComment
+			 ifTrue: [ class comment ]
+			 ifFalse: [ nil ]).
+	result
+		at: 'superclasses'
+		put: (class allSuperclasses collect: [ :c | c name ]) asArray.
+	result at: 'instanceVariables' put: class allInstVarNames asArray.
+	sides := aSide = 'both'
+		         ifTrue: [ { 'instance'. 'class' } ]
+		         ifFalse: [ { (aSide ifNil: [ 'instance' ]) } ].
+	result at: 'sides' put: (sides collect: [ :s |
+			 self
+				 digestSideFor: class
+				 side: s
+				 includeSources: aSelectorListOrBool ]) asArray.
+	^ result
 ]
 
 { #category : 'helpers - class comment' }
@@ -288,6 +363,52 @@ PharoMcpServer >> deferToUi: aBlock [
 	self currentWorld worldState defer: aBlock
 ]
 
+{ #category : 'batch' }
+PharoMcpServer >> digestSideFor: aClass side: aSideString includeSources: aSelectorListOrBool [
+	"One side (instance or class) of a class digest: definition, protocol->selectors map, and the chosen
+	 method sources. Selectors sorted; protocols sorted; deterministic."
+
+	| behavior wanted methods protocolMap sources |
+	behavior := aSideString = 'class'
+		            ifTrue: [ aClass classSide ]
+		            ifFalse: [ aClass ].
+	methods := behavior selectors asSortedCollection asArray.
+	protocolMap := Dictionary new.
+	behavior protocolNames asSortedCollection do: [ :p |
+			protocolMap
+				at: p asString
+				put:
+					((behavior selectorsInProtocol: p) asSortedCollection asArray
+						 collect: [ :s | s asString ]) ].
+	wanted := aSelectorListOrBool isNil
+		          ifTrue: [ #(  ) ]
+		          ifFalse: [
+				          aSelectorListOrBool == true
+					          ifTrue: [ methods ]
+					          ifFalse: [
+							          aSelectorListOrBool == false
+								          ifTrue: [ #(  ) ]
+								          ifFalse: [
+								          aSelectorListOrBool collect: [ :s | s asString ] ] ] ].
+	sources := wanted collect: [ :sel |
+			           Dictionary new
+				           at: 'selector' put: sel asString;
+				           at: 'found'
+				           put: (behavior includesSelector: sel asSymbol);
+				           at: 'source'
+				           put: ((behavior includesSelector: sel asSymbol)
+						            ifTrue: [ (behavior >> sel asSymbol) sourceCode ]
+						            ifFalse: [ nil ]);
+				           yourself ].
+	^ Dictionary new
+		  at: 'side' put: aSideString;
+		  at: 'definition' put: behavior definitionString;
+		  at: 'selectorCount' put: methods size;
+		  at: 'protocols' put: protocolMap;
+		  at: 'sources' put: sources asArray;
+		  yourself
+]
+
 { #category : 'modification' }
 PharoMcpServer >> ensureProtocol: aProtocol in: aClassName [
 	"Ensure the given protocol exists on the class (creating it if necessary). Returns the protocol name."
@@ -363,6 +484,16 @@ PharoMcpServer >> iceRepositoryNamed: aString [
 		  ifNone: [ nil ]
 ]
 
+{ #category : 'batch' }
+PharoMcpServer >> impactEntryLines: sortedLines [
+	"Wrap a pre-sorted Array of lines as a { count, lines } entry for a change-impact result."
+
+	^ Dictionary new
+		  at: 'count' put: sortedLines size;
+		  at: 'lines' put: sortedLines asArray;
+		  yourself
+]
+
 { #category : 'initialization' }
 PharoMcpServer >> initialize [
 
@@ -406,34 +537,55 @@ PharoMcpServer >> linesAsText: sortedLines offset: anOffset limit: aLimit [
 	| total lo hi window |
 	total := sortedLines size.
 	lo := (anOffset ifNil: [ 0 ]) max: 0.
-	hi := aLimit ifNil: [ total ] ifNotNil: [ (lo + aLimit) min: total ].
-	window := lo >= total ifTrue: [ #(  ) ] ifFalse: [ sortedLines copyFrom: lo + 1 to: hi ].
+	hi := aLimit ifNil: [ total ] ifNotNil: [ lo + aLimit min: total ].
+	window := lo >= total
+		          ifTrue: [ #(  ) ]
+		          ifFalse: [ sortedLines copyFrom: lo + 1 to: hi ].
 	^ String streamContents: [ :s |
-		s nextPutAll: '# '; print: total; nextPutAll: ' result(s)'.
-		(aLimit notNil and: [ total > window size ]) ifTrue: [
-			s nextPutAll: ', showing '; print: lo; nextPutAll: '..'; print: lo + window size;
-			  nextPutAll: ' (pass offset/limit to page)' ].
-		s cr.
-		window do: [ :line | s nextPutAll: line; cr ] ]
+			  s
+				  nextPutAll: '# ';
+				  print: total;
+				  nextPutAll: ' result(s)'.
+			  (aLimit notNil and: [ total > window size ]) ifTrue: [
+					  s
+						  nextPutAll: ', showing ';
+						  print: lo;
+						  nextPutAll: '..';
+						  print: lo + window size;
+						  nextPutAll: ' (pass offset/limit to page)' ].
+			  s cr.
+			  window do: [ :line |
+					  s
+						  nextPutAll: line;
+						  cr ] ]
 ]
 
 { #category : 'navigation' }
 PharoMcpServer >> localSendersOf: aSymbolString in: aClassName [
-	^ self localSendersOf: aSymbolString in: aClassName offset: nil limit: nil
+
+	^ self
+		  localSendersOf: aSymbolString
+		  in: aClassName
+		  offset: nil
+		  limit: nil
 ]
 
 { #category : 'navigation' }
 PharoMcpServer >> localSendersOf: aSymbolString in: aClassName offset: anOffset limit: aLimit [
+
 	| class selector |
 	class := self classNamed: aClassName.
 	class ifNil: [ ^ 'ERROR: class not found: ' , aClassName ].
 	selector := aSymbolString trimBoth asSymbol.
 	^ self
-		linesAsText: (self
-			cachedLinesAt: { #localSenders. class name. selector }
-			ifAbsent: [ class allLocalCallsOn: selector ])
-		offset: anOffset
-		limit: aLimit
+		  linesAsText: (self
+				   cachedLinesAt: {
+						   #localSenders.
+						   class name.
+						   selector }
+				   ifAbsent: [ class allLocalCallsOn: selector ])
+		  offset: anOffset
+		  limit: aLimit
 ]
 
 { #category : 'reflection' }
@@ -457,14 +609,17 @@ PharoMcpServer >> methodSendersOf: aSelector [
 
 { #category : 'navigation' }
 PharoMcpServer >> methodSendersOf: aSelector offset: anOffset limit: aLimit [
+
 	| selector |
 	selector := aSelector trimBoth asSymbol.
 	^ self
-		linesAsText: (self
-			cachedLinesAt: { #senders. selector }
-			ifAbsent: [ SystemNavigation default allSendersOf: selector ])
-		offset: anOffset
-		limit: aLimit
+		  linesAsText: (self
+				   cachedLinesAt: {
+						   #senders.
+						   selector }
+				   ifAbsent: [ SystemNavigation default allSendersOf: selector ])
+		  offset: anOffset
+		  limit: aLimit
 ]
 
 { #category : 'private' }
@@ -492,6 +647,21 @@ PharoMcpServer >> methodSourceFor: aClassName selector: aSelector classSide: cla
 	(behavior includesSelector: selector) 
 		ifFalse: [ ^ 'ERROR: selector not found: ' , behavior name , '>>' , aSelector ].
 	^ (behavior >> selector) sourceCode
+]
+
+{ #category : 'batch' }
+PharoMcpServer >> methodSourcesFor: refArray [
+	"Batch source fetch. refArray is an array of 'Class>>selector' (or 'Class class>>selector') strings.
+	 Answers a neutral result dict: { results: [ {ref, className, selector, classSide, found, source|error} ] }.
+	 One call replaces N pharo_method_source calls — the most common hand-rolled WriteStream pattern."
+
+	| rows |
+	rows := (refArray ifNil: [ #(  ) ]) collect: [ :ref |
+		        self oneMethodSourceRow: ref ].
+	^ Dictionary new
+		  at: 'results' put: rows asArray;
+		  at: 'count' put: rows size;
+		  yourself
 ]
 
 { #category : 'modification' }
@@ -533,6 +703,51 @@ PharoMcpServer >> normalizedNamesFrom: anObject [
 	^ { anObject asString trimBoth }
 ]
 
+{ #category : 'batch' }
+PharoMcpServer >> oneMethodSourceRow: aRef [
+	"Resolve one 'Class>>selector' or 'Class class>>selector' reference to a result row."
+
+	| ref parts classPart classSide class behavior selector row |
+	row := Dictionary new.
+	ref := aRef trimBoth.
+	row at: 'ref' put: ref.
+	parts := ref substrings: '>>'.
+	parts size = 2 ifFalse: [
+			^ row
+				  at: 'found' put: false;
+				  at: 'error' put: 'malformed ref (expected Class>>selector)';
+				  yourself ].
+	classPart := parts first trimBoth.
+	classSide := classPart endsWith: ' class'.
+	classPart := classSide
+		             ifTrue: [
+		             (classPart copyFrom: 1 to: classPart size - 6) trimBoth ]
+		             ifFalse: [ classPart ].
+	selector := parts second trimBoth.
+	row
+		at: 'className' put: classPart;
+		at: 'selector' put: selector;
+		at: 'classSide' put: classSide.
+	class := self classNamed: classPart.
+	class ifNil: [
+			^ row
+				  at: 'found' put: false;
+				  at: 'error' put: 'class not found';
+				  yourself ].
+	behavior := classSide
+		            ifTrue: [ class classSide ]
+		            ifFalse: [ class ].
+	(behavior includesSelector: selector asSymbol) ifFalse: [
+			^ row
+				  at: 'found' put: false;
+				  at: 'error' put: 'selector not found';
+				  yourself ].
+	row
+		at: 'found' put: true;
+		at: 'source' put: (behavior >> selector asSymbol) sourceCode.
+	^ row
+]
+
 { #category : 'accessing' }
 PharoMcpServer >> port [
 
@@ -543,6 +758,28 @@ PharoMcpServer >> port [
 PharoMcpServer >> port: aPortNumber [
 
 	port := aPortNumber asNumber
+]
+
+{ #category : 'batch' }
+PharoMcpServer >> projectResult: aNeutralObject [
+	"Project a neutral result (Dictionary / Array / scalar) to pretty JSON text. The generic Pharo MCP
+	 server emits JSON only; it deliberately does NOT depend on SmtIR / ISON (that would invert the
+	 layering — SmtIR depends on this MCP framework, not the reverse)."
+
+	^ STONJSON toStringPretty: aNeutralObject
+]
+
+{ #category : 'batch' }
+PharoMcpServer >> projectResult: aNeutralObject format: aFormatStringOrNil [
+	"Project a neutral result (Dictionary / Array / scalar) to tool-result text: pretty JSON (default) or
+	 IsonGraph ('ison'), the token-efficient columnar format. IsonGraph lives in the neutral ISON-Core
+	 package (no SMT dependency), so using it here keeps LLM-Pharo-Agent free of any SmtIR coupling.
+	 Unknown format falls back to JSON — a presentation choice must never fail a tool call."
+
+	(aFormatStringOrNil notNil and: [
+		 aFormatStringOrNil asString = 'ison' ]) ifTrue: [
+		^ IsonGraphWriter new documentFor: aNeutralObject ].
+	^ STONJSON toStringPretty: aNeutralObject
 ]
 
 { #category : 'helpers - protocols' }
@@ -698,6 +935,85 @@ PharoMcpServer >> registerBasicToolsOn: aServer [
 						 (self
 							  removeMethod: (args at: 'selector')
 							  from: (args at: 'className')) ]).
+]
+
+{ #category : 'tools' }
+PharoMcpServer >> registerBatchToolsOn: aServer [
+	"Higher-level tools that collapse the multi-call / hand-rolled-eval patterns the session-store usage
+	 profile showed agents repeating (batch source fetch, class overview, test run, change impact). Each is
+	 read-only, deterministic, and accepts an optional format (json default | ison) projected via
+	 IsonGraphWriter from the neutral ISON-Core package — so this server gets the token-efficient output
+	 WITHOUT depending on SmtIR. The granular tools remain; these are additive."
+
+	| fmt |
+	fmt := [ :args | args at: 'format' ifAbsent: [ nil ] ].
+
+	aServer addTool: (McpTool
+			 name: 'pharo_method_sources'
+			 description:
+			 'Batch source fetch: given refs (array of "Class>>selector" or "Class class>>selector"), return each one''s source in a single call. Replaces N pharo_method_source calls. Each result row: {ref, className, selector, classSide, found, source|error}. Optional format: json (default) | ison.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('refs' -> (McpSchema array: McpSchema string)).
+							  ('format' -> (McpSchema string: 'json (default) | ison')) }
+					  required: #( 'refs' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  projectResult: (self methodSourcesFor: (args at: 'refs'))
+							  format: (fmt value: args)) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_class_digest'
+			 description:
+			 'One-call class overview: definition, comment, superclasses, instance variables, protocol->selector map, and (optionally) method sources. Replaces class_source + a fan-out of method_source/protocol_names calls. Args: className (required); side (instance|class|both, default instance); includeSources (true = all selectors on the chosen side(s), or an array of selector names, default none). Optional format: json (default) | ison.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('side'
+							   -> (McpSchema string: 'instance (default) | class | both')).
+							  ('includeSources' -> (McpSchema array: McpSchema string)).
+							  ('format' -> (McpSchema string: 'json (default) | ison')) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  projectResult: (self
+									   classDigestFor: (args at: 'className')
+									   side: (args at: 'side' ifAbsent: [ 'instance' ])
+									   includeSources:
+									   (args at: 'includeSources' ifAbsent: [ nil ]))
+							  format: (fmt value: args)) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_change_impact'
+			 description:
+			 'What a change touches, in one cached pass: class references + subclasses, plus (when a selector is given) its senders + implementors. Replaces three separate scan tools. Each entry {count, lines}. Optional format: json (default) | ison.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('selector' -> (McpSchema string:
+								    'optional: also senders + implementors of this selector')).
+							  ('format' -> (McpSchema string: 'json (default) | ison')) }
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  projectResult: (self
+									   changeImpactOf: (args at: 'className')
+									   selector: (args at: 'selector' ifAbsent: [ nil ]))
+							  format: (fmt value: args)) ]).
+
+	aServer addTool: (McpTool
+			 name: 'pharo_run_tests'
+			 description:
+			 'Run the SUnit suite for a TestCase class, or every TestCase class in a package. Returns {classes, run, passed, failureCount, errorCount, failures[], errors[]} with failing tests as Class>>selector — a typed result instead of a parsed printString. Arg: name (a class or package name). Optional format: json (default) | ison.'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('name' -> McpSchema string).
+							  ('format' -> (McpSchema string: 'json (default) | ison')) }
+					  required: #( 'name' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  projectResult: (self runTestsFor: (args at: 'name'))
+							  format: (fmt value: args)) ])
 ]
 
 { #category : 'tool registration' }
@@ -1347,13 +1663,14 @@ PharoMcpServer >> registerSlotAccessToolsOn: aServer [
 					 (self localSlotsOf: (args at: 'className')) ]).
 ]
 
-{ #category : 'tool registration' }
+{ #category : 'tools' }
 PharoMcpServer >> registerToolsOn: aServer [
 
 	self registerBasicToolsOn: aServer.
 	self registerXRefToolsOn: aServer.
 	self registerInstanceVariableToolsOn: aServer.
-	self registerNewToolsOn: aServer
+	self registerNewToolsOn: aServer.
+	self registerBatchToolsOn: aServer
 ]
 
 { #category : 'tool registration' }
@@ -1424,52 +1741,54 @@ PharoMcpServer >> registerXRefToolsOn: aServer [
 
 	| pagingProps readOffset readLimit |
 	pagingProps := {
-		('offset' -> (McpSchema integer: 'Result offset (default 0)')).
-		('limit' -> (McpSchema integer: 'Max results (default 200; omit via a large value for all)')) }.
+		               ('offset'
+		                -> (McpSchema integer: 'Result offset (default 0)')).
+		               ('limit' -> (McpSchema integer:
+			                 'Max results (default 200; omit via a large value for all)')) }.
 	readOffset := [ :args | args at: 'offset' ifAbsent: [ 0 ] ].
 	readLimit := [ :args | args at: 'limit' ifAbsent: [ 200 ] ].
 
 	aServer addTool: (McpTool
-		 name: 'pharo_class_references'
-		 description:
-		 'Answer every method in the image that refers to the given class by name or as a global binding. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
-		 inputSchema: (McpSchema
-			 object: { ('className' -> McpSchema string) } , pagingProps
-			 required: #( 'className' ))
-		 handler: [ :args |
-			 McpToolResult successText: (self
-				 allCallsOnClass: (args at: 'className')
-				 offset: (readOffset value: args)
-				 limit: (readLimit value: args)) ]).
+			 name: 'pharo_class_references'
+			 description:
+			 'Answer every method in the image that refers to the given class by name or as a global binding. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+			 inputSchema: (McpSchema
+					  object: { ('className' -> McpSchema string) } , pagingProps
+					  required: #( 'className' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  allCallsOnClass: (args at: 'className')
+							  offset: (readOffset value: args)
+							  limit: (readLimit value: args)) ]).
 
 	aServer addTool: (McpTool
-		 name: 'pharo_method_senders'
-		 description:
-		 'Answer every method in the image that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
-		 inputSchema: (McpSchema
-			 object: { ('selector' -> McpSchema string) } , pagingProps
-			 required: #( 'selector' ))
-		 handler: [ :args |
-			 McpToolResult successText: (self
-				 methodSendersOf: (args at: 'selector')
-				 offset: (readOffset value: args)
-				 limit: (readLimit value: args)) ]).
+			 name: 'pharo_method_senders'
+			 description:
+			 'Answer every method in the image that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+			 inputSchema: (McpSchema
+					  object: { ('selector' -> McpSchema string) } , pagingProps
+					  required: #( 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  methodSendersOf: (args at: 'selector')
+							  offset: (readOffset value: args)
+							  limit: (readLimit value: args)) ]).
 
 	aServer addTool: (McpTool
-		 name: 'pharo_local_senders'
-		 description:
-		 'Answer every method in the given class hierarchy that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
-		 inputSchema: (McpSchema
-			 object: {
-				 ('className' -> McpSchema string).
-				 ('selector' -> McpSchema string) } , pagingProps
-			 required: #( 'className' 'selector' ))
-		 handler: [ :args |
-			 McpToolResult successText: (self
-				 localSendersOf: (args at: 'selector')
-				 in: (args at: 'className')
-				 offset: (readOffset value: args)
-				 limit: (readLimit value: args)) ])
+			 name: 'pharo_local_senders'
+			 description:
+			 'Answer every method in the given class hierarchy that sends the given selector. One method per line as Class>>selector, preceded by a # count header. Cached; paged via offset/limit (default limit 200).'
+			 inputSchema: (McpSchema
+					  object: {
+							  ('className' -> McpSchema string).
+							  ('selector' -> McpSchema string) } , pagingProps
+					  required: #( 'className' 'selector' ))
+			 handler: [ :args |
+					 McpToolResult successText: (self
+							  localSendersOf: (args at: 'selector')
+							  in: (args at: 'className')
+							  offset: (readOffset value: args)
+							  limit: (readLimit value: args)) ])
 ]
 
 { #category : 'helpers - slots' }
@@ -1512,6 +1831,47 @@ PharoMcpServer >> removeMethod: aSelector from: aClassName [
 	^ 'removed'
 ]
 
+{ #category : 'batch' }
+PharoMcpServer >> runTestsFor: aName [
+	"Run the SUnit suite for a TestCase class OR every TestCase class in a package named aName. Answers a
+	 neutral result dict with totals and the failing/erroring selectors (as Class>>selector). Replaces the
+	 hand-rolled 'X buildSuite run' evals with a typed result."
+
+	| classes suites run passed failures errors |
+	classes := OrderedCollection new.
+	(self classNamed: aName) ifNotNil: [ :c |
+		(c inheritsFrom: TestCase) ifTrue: [ classes add: c ] ].
+	classes ifEmpty: [
+			(PackageOrganizer default packageNamed: aName ifAbsent: [ nil ])
+				ifNotNil: [ :p |
+						classes addAll:
+							((p definedClasses select: [ :c | c inheritsFrom: TestCase ])
+								 reject: [ :c | c isAbstract ]) ] ].
+	classes ifEmpty: [
+			^ Dictionary new
+				  at: 'error' put: 'no TestCase class or package named: ' , aName;
+				  yourself ].
+	run := passed := 0.
+	failures := OrderedCollection new.
+	errors := OrderedCollection new.
+	classes do: [ :c |
+			| r |
+			r := c buildSuite run.
+			run := run + r runCount.
+			passed := passed + r passedCount.
+			r failures do: [ :t | failures add: c name , '>>' , t selector ].
+			r errors do: [ :t | errors add: c name , '>>' , t selector ] ].
+	^ Dictionary new
+		  at: 'classes' put: (classes collect: [ :c | c name ]) asArray;
+		  at: 'run' put: run;
+		  at: 'passed' put: passed;
+		  at: 'failureCount' put: failures size;
+		  at: 'errorCount' put: errors size;
+		  at: 'failures' put: failures asSortedCollection asArray;
+		  at: 'errors' put: errors asSortedCollection asArray;
+		  yourself
+]
+
 { #category : 'reflection' }
 PharoMcpServer >> selectorsInProtocol: aProtocolName of: aClassName [
 	"Answer a textual list of every selector in the given protocol across the class hierarchy."
@@ -1529,8 +1889,8 @@ PharoMcpServer >> sendersCache [
 	 method is added/removed/changed in the image (see subscribeToSystemChanges)."
 
 	^ sendersCache ifNil: [
-		self subscribeToSystemChanges.
-		sendersCache := Dictionary new ]
+			  self subscribeToSystemChanges.
+			  sendersCache := Dictionary new ]
 ]
 
 { #category : 'accessing' }

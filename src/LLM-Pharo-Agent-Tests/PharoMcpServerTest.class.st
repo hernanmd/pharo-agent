@@ -64,7 +64,7 @@ PharoMcpServerTest >> testCompileMethodSourceCreatesClassSideMethod [
 
 	behavior := self generatedClass classSide.
 	self assert: (behavior includesSelector: #answer).
-	self assert: (behavior perform: #answer) equals: 42
+	self assert: (behavior instanceSide perform: #answer) equals: 42
 ]
 
 { #category : 'running' }
