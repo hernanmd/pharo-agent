@@ -22,7 +22,7 @@ BaselineOfLLMPharoAgent >> baseline: spec [
 				with: [ spec repository: 'github://hernanmd/ison-pharo:master/src' ].
 			spec
 				package: 'LLM-Pharo-Agent'
-				with: [ spec requires: #( 'ISONCore' ) ];
+				with: [ spec requires: #( 'ISONCore' 'LLMPharoMCP' ) ];
 				package: 'LLM-Pharo-Agent-Tests'
 				with: [ spec requires: #( 'LLM-Pharo-Agent' ) ].
 			spec
